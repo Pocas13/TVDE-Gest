@@ -982,7 +982,7 @@ function upsertBoltDriver(d){
     reg_number:d.active_vehicle.reg_number, vin:d.active_vehicle.vin, uuid:d.active_vehicle.uuid,
     state:d.active_vehicle.state, seats:null,
   });
-  const platforms=Array.from(new Set([...(existing?.plataformas||[]),'Bolt']));
+  const plataformas=Array.from(new Set([...(existing?.plataformas||[]),'Bolt']));
   const data={
     ...(existing||{}), id:existing?.id||uid(), nome:name, contacto:d.phone||existing?.contacto||'',
     email:d.email||existing?.email||'', vehicleId:activeVehicle?.id||existing?.vehicleId||'', plataformas,

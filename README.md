@@ -1,6 +1,6 @@
 # TVDE Gest
 
-Aplicação de gestão de frota TVDE com integração oficial à Bolt Fleet Integration API. O mesmo Cloudflare Worker serve o painel e a API, mantendo o `BOLT_CLIENT_SECRET` fora do navegador e fora do GitHub.
+Versão 0.4.1 da aplicação de gestão de frota TVDE com integração oficial à Bolt Fleet Integration API. O mesmo Cloudflare Worker serve o painel e a API, mantendo o `BOLT_CLIENT_SECRET` fora do navegador e fora do GitHub.
 
 **Repositório oficial:** `https://github.com/Pocas13/TVDE-Gest.git`
 
@@ -18,13 +18,13 @@ Aplicação de gestão de frota TVDE com integração oficial à Bolt Fleet Inte
 Extrai o ZIP para:
 
 ```powershell
-D:\TVDE-Gest
+D:\TVDE Gest
 ```
 
 Depois executa:
 
 ```powershell
-cd D:\TVDE-Gest
+Set-Location "D:\TVDE Gest"
 code .
 npm install
 Copy-Item .dev.vars.example .dev.vars
@@ -38,6 +38,8 @@ BOLT_CLIENT_SECRET=O_TEU_CLIENT_SECRET
 ```
 
 Não uses aspas. O ficheiro `.dev.vars` está incluído no `.gitignore`.
+
+> Como a pasta tem um espaço no nome, usa sempre aspas no PowerShell. Também podes escrever `cd "D:\TVDE Gest"`.
 
 ## 2. Testar localmente
 
