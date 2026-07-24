@@ -1,0 +1,1156 @@
+<!DOCTYPE html>
+<html lang="pt-PT">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Painel de Frota — Uber &amp; Bolt</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<style>
+:root{
+  --bg:#16181B;
+  --bg-panel:#1F2226;
+  --bg-elevated:#282C31;
+  --bg-hover:#31363C;
+  --line:#383D44;
+  --text:#EDEEF0;
+  --text-dim:#9BA1AA;
+  --text-faint:#666C75;
+  --uber:#5B7CFA;
+  --uber-dim:#5B7CFA33;
+  --bolt:#33D19B;
+  --bolt-dim:#33D19B2E;
+  --warn:#F2994A;
+  --danger:#F25C54;
+  --radius:10px;
+  --font-display:'Barlow Condensed',sans-serif;
+  --font-body:'Inter',sans-serif;
+  --font-mono:'IBM Plex Mono',monospace;
+}
+*{box-sizing:border-box; margin:0; padding:0;}
+body{
+  background:var(--bg);
+  color:var(--text);
+  font-family:var(--font-body);
+  min-height:100vh;
+  -webkit-font-smoothing:antialiased;
+}
+::selection{background:var(--uber-dim); color:var(--text);}
+a{color:inherit;}
+
+/* ---------- layout ---------- */
+.app{display:flex; min-height:100vh;}
+
+.sidebar{
+  width:220px; flex-shrink:0;
+  background:var(--bg-panel);
+  border-right:1px solid var(--line);
+  display:flex; flex-direction:column;
+  padding:20px 14px;
+  position:sticky; top:0; height:100vh;
+}
+.brand{
+  display:flex; align-items:baseline; gap:8px;
+  padding:6px 8px 22px 8px;
+}
+.brand-mark{
+  width:10px; height:10px; border-radius:2px;
+  background:linear-gradient(135deg,var(--uber),var(--bolt));
+  transform:rotate(45deg);
+}
+.brand-name{
+  font-family:var(--font-display); font-weight:700; font-size:22px;
+  letter-spacing:0.3px;
+}
+.brand-sub{font-size:10px; color:var(--text-faint); letter-spacing:1.5px; text-transform:uppercase; margin-left:2px;}
+
+nav{display:flex; flex-direction:column; gap:2px; margin-top:8px;}
+.nav-item{
+  display:flex; align-items:center; gap:10px;
+  padding:9px 10px; border-radius:8px;
+  font-size:14px; font-weight:500; color:var(--text-dim);
+  cursor:pointer; border:none; background:none; text-align:left; width:100%;
+  transition:background .12s, color .12s;
+  font-family:var(--font-body);
+}
+.nav-item svg{width:16px; height:16px; flex-shrink:0; opacity:.85;}
+.nav-item:hover{background:var(--bg-hover); color:var(--text);}
+.nav-item.active{background:var(--bg-elevated); color:var(--text);}
+.nav-item.active .dot{opacity:1;}
+
+.sidebar-foot{
+  margin-top:auto; padding:10px 8px;
+  font-size:11px; color:var(--text-faint);
+  border-top:1px solid var(--line); padding-top:14px;
+}
+
+.main{flex:1; min-width:0; display:flex; flex-direction:column;}
+.topbar{
+  display:flex; align-items:center; justify-content:space-between;
+  padding:18px 32px; border-bottom:1px solid var(--line);
+  background:var(--bg);
+}
+.topbar h1{font-family:var(--font-display); font-weight:600; font-size:26px; letter-spacing:.2px;}
+.topbar-meta{font-size:12px; color:var(--text-faint); font-family:var(--font-mono);}
+
+.content{padding:28px 32px 60px 32px; max-width:1180px;}
+
+/* ---------- generic components ---------- */
+.card{
+  background:var(--bg-panel); border:1px solid var(--line); border-radius:var(--radius);
+  padding:20px;
+}
+.grid{display:grid; gap:16px;}
+.kpi-grid{grid-template-columns:repeat(4,1fr); margin-bottom:20px;}
+@media (max-width:900px){.kpi-grid{grid-template-columns:repeat(2,1fr);}}
+
+.kpi{
+  background:var(--bg-panel); border:1px solid var(--line); border-radius:var(--radius);
+  padding:16px 18px; position:relative; overflow:hidden;
+}
+.kpi-label{font-size:11px; text-transform:uppercase; letter-spacing:1px; color:var(--text-faint); margin-bottom:8px;}
+.kpi-value{font-family:var(--font-mono); font-size:28px; font-weight:600; font-variant-numeric:tabular-nums;}
+.kpi-sub{font-size:12px; color:var(--text-dim); margin-top:6px;}
+.kpi.uber{border-top:2px solid var(--uber);}
+.kpi.bolt{border-top:2px solid var(--bolt);}
+
+.section-title{
+  font-family:var(--font-display); font-weight:600; font-size:19px;
+  margin:28px 0 12px 0; letter-spacing:.2px;
+}
+.section-title:first-child{margin-top:0;}
+
+.pill{
+  display:inline-flex; align-items:center; gap:5px;
+  font-size:11px; font-weight:600; padding:3px 9px; border-radius:99px;
+  text-transform:uppercase; letter-spacing:.4px;
+}
+.pill.uber{background:var(--uber-dim); color:var(--uber);}
+.pill.bolt{background:var(--bolt-dim); color:var(--bolt);}
+.pill.ativo{background:#33D19B2E; color:var(--bolt);}
+.pill.manutencao{background:#F2994A2E; color:var(--warn);}
+.pill.parado{background:#F25C542E; color:var(--danger);}
+
+table{width:100%; border-collapse:collapse; font-size:13.5px;}
+th{
+  text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.6px;
+  color:var(--text-faint); font-weight:600; padding:10px 12px; border-bottom:1px solid var(--line);
+}
+td{padding:11px 12px; border-bottom:1px solid var(--line); color:var(--text);}
+tr:last-child td{border-bottom:none;}
+tbody tr:hover{background:var(--bg-hover);}
+.num{font-family:var(--font-mono); font-variant-numeric:tabular-nums;}
+.table-wrap{background:var(--bg-panel); border:1px solid var(--line); border-radius:var(--radius); overflow:hidden;}
+.table-empty{padding:40px 20px; text-align:center; color:var(--text-faint); font-size:13.5px;}
+
+button.btn{
+  font-family:var(--font-body); font-weight:600; font-size:13px;
+  padding:9px 16px; border-radius:8px; border:1px solid var(--line);
+  background:var(--bg-elevated); color:var(--text); cursor:pointer;
+  transition:background .12s, border-color .12s;
+}
+button.btn:hover{background:var(--bg-hover); border-color:#4a5058;}
+button.btn.primary{background:var(--text); color:var(--bg); border-color:var(--text);}
+button.btn.primary:hover{opacity:.9;}
+button.btn.danger{color:var(--danger); border-color:#F25C5444;}
+button.btn.small{padding:5px 10px; font-size:12px;}
+button.icon-btn{
+  background:none; border:none; color:var(--text-faint); cursor:pointer; padding:4px;
+  border-radius:6px; display:inline-flex;
+}
+button.icon-btn:hover{color:var(--text); background:var(--bg-hover);}
+
+.toolbar{display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; gap:10px; flex-wrap:wrap;}
+.toolbar-left{display:flex; gap:8px; align-items:center;}
+.tabs{display:flex; gap:4px; background:var(--bg-panel); border:1px solid var(--line); border-radius:8px; padding:3px;}
+.tab{padding:6px 14px; border-radius:6px; font-size:13px; font-weight:500; color:var(--text-dim); cursor:pointer;}
+.tab.active{background:var(--bg-elevated); color:var(--text);}
+
+/* modal */
+.overlay{
+  position:fixed; inset:0; background:#0A0B0Ccc; backdrop-filter:blur(2px);
+  display:flex; align-items:center; justify-content:center; z-index:100; padding:20px;
+}
+.modal{
+  background:var(--bg-panel); border:1px solid var(--line); border-radius:12px;
+  width:100%; max-width:460px; padding:22px; max-height:88vh; overflow-y:auto;
+}
+.modal h3{font-family:var(--font-display); font-weight:600; font-size:20px; margin-bottom:16px;}
+.field{margin-bottom:12px;}
+.field label{display:block; font-size:12px; color:var(--text-dim); margin-bottom:5px; font-weight:500;}
+.field input, .field select, .field textarea{
+  width:100%; background:var(--bg); border:1px solid var(--line); border-radius:7px;
+  padding:9px 10px; color:var(--text); font-size:13.5px; font-family:var(--font-body);
+}
+.field input:focus, .field select:focus, .field textarea:focus{outline:none; border-color:var(--uber);}
+.field-row{display:grid; grid-template-columns:1fr 1fr; gap:10px;}
+.modal-actions{display:flex; justify-content:flex-end; gap:8px; margin-top:18px;}
+
+.route-hero{
+  position:relative; height:34px; margin-bottom:22px; overflow:hidden;
+}
+.route-hero svg{width:100%; height:100%;}
+.route-dash{stroke-dasharray:6 7; animation:dashmove 3.5s linear infinite;}
+@keyframes dashmove{to{stroke-dashoffset:-52;}}
+
+.empty-state{
+  text-align:center; padding:50px 20px; color:var(--text-faint);
+}
+.empty-state svg{width:34px; height:34px; margin-bottom:10px; opacity:.5;}
+.empty-state p{font-size:13.5px; margin-bottom:14px;}
+
+.info-card{
+  background:var(--bg-elevated); border:1px solid var(--line); border-left:3px solid var(--uber);
+  border-radius:8px; padding:16px 18px; font-size:13px; color:var(--text-dim); line-height:1.6;
+  margin-bottom:18px;
+}
+.info-card b{color:var(--text);}
+.info-card a{color:var(--uber); text-decoration:underline; text-underline-offset:2px;}
+
+.csv-drop{
+  border:1.5px dashed var(--line); border-radius:10px; padding:34px 20px; text-align:center;
+  color:var(--text-dim); font-size:13.5px; cursor:pointer; transition:border-color .12s, background .12s;
+}
+.csv-drop:hover{border-color:var(--uber); background:var(--bg-elevated);}
+.csv-drop.drag{border-color:var(--bolt); background:var(--bg-elevated);}
+
+.mini-bar-row{display:flex; align-items:center; gap:10px; font-size:12px; margin-bottom:8px;}
+.mini-bar-label{width:70px; color:var(--text-dim); flex-shrink:0; font-family:var(--font-mono);}
+.mini-bar-track{flex:1; height:8px; background:var(--bg); border-radius:4px; overflow:hidden; display:flex;}
+.mini-bar-fill{height:100%;}
+.mini-bar-value{width:70px; text-align:right; font-family:var(--font-mono); color:var(--text-dim); flex-shrink:0;}
+
+.badge-dot{width:6px; height:6px; border-radius:50%; display:inline-block; margin-right:6px;}
+
+.hidden{display:none !important;}
+.toast{
+  position:fixed; bottom:22px; left:50%; transform:translateX(-50%);
+  background:var(--text); color:var(--bg); padding:10px 18px; border-radius:8px;
+  font-size:13px; font-weight:600; z-index:200; box-shadow:0 8px 24px #0006;
+}
+::-webkit-scrollbar{width:9px; height:9px;}
+::-webkit-scrollbar-thumb{background:var(--line); border-radius:5px;}
+::-webkit-scrollbar-track{background:transparent;}
+</style>
+</head>
+<body>
+
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark"></div>
+      <div>
+        <div class="brand-name">Frota</div>
+        <div class="brand-sub">Uber · Bolt</div>
+      </div>
+    </div>
+    <nav id="nav"></nav>
+    <div class="sidebar-foot">Dados locais neste navegador. Credenciais Bolt ficam no Worker.</div>
+  </aside>
+
+  <div class="main">
+    <div class="topbar">
+      <h1 id="page-title">Painel</h1>
+      <div class="topbar-meta" id="topbar-meta">—</div>
+    </div>
+    <div class="content" id="content"></div>
+  </div>
+</div>
+
+<div id="modal-root"></div>
+<div id="toast-root"></div>
+
+<script>
+/* ============================================================
+   ESTADO E PERSISTÊNCIA
+============================================================ */
+const STORE_KEYS = { vehicles:'frota:vehicles', drivers:'frota:drivers', entries:'frota:entries', settings:'frota:settings' };
+const todayIso = () => new Date().toISOString().slice(0,10);
+const daysAgoIso = (days) => { const d=new Date(); d.setDate(d.getDate()-days); return d.toISOString().slice(0,10); };
+const DEFAULT_SETTINGS = {
+  moeda:'EUR',
+  boltProxyUrl:'',
+  boltCompanyId:'',
+  boltStartDate:daysAgoIso(7),
+  boltEndDate:todayIso(),
+};
+let state = { vehicles: [], drivers: [], entries: [], settings: { ...DEFAULT_SETTINGS } };
+let currentView = 'painel';
+
+function uid(){ return globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2)+Date.now().toString(36); }
+
+const storageAdapter = {
+  async get(key){
+    if(window.storage?.get){
+      const result = await window.storage.get(key, false);
+      return result?.value ?? null;
+    }
+    return localStorage.getItem(key);
+  },
+  async set(key, value){
+    if(window.storage?.set) return window.storage.set(key, value, false);
+    localStorage.setItem(key, value);
+  }
+};
+
+async function loadAll(){
+  for (const key of ['vehicles','drivers','entries','settings']){
+    try{
+      const raw = await storageAdapter.get(STORE_KEYS[key]);
+      if(raw) state[key] = JSON.parse(raw);
+    }catch(e){ console.warn(`Não foi possível carregar ${key}.`, e); }
+  }
+  state.settings = { ...DEFAULT_SETTINGS, ...(state.settings||{}) };
+}
+async function save(key){
+  try{
+    await storageAdapter.set(STORE_KEYS[key], JSON.stringify(state[key]));
+  }catch(e){ toast('Erro ao guardar dados neste navegador.'); console.error(e); }
+}
+
+function toast(msg){
+  const root = document.getElementById('toast-root');
+  const el = document.createElement('div');
+  el.className='toast'; el.textContent=msg;
+  root.appendChild(el);
+  setTimeout(()=>el.remove(), 2800);
+}
+
+/* ============================================================
+   NAVEGAÇÃO
+============================================================ */
+const NAV_ITEMS = [
+  {id:'painel', label:'Painel', icon:'grid'},
+  {id:'veiculos', label:'Veículos', icon:'car'},
+  {id:'motoristas', label:'Motoristas', icon:'user'},
+  {id:'registos', label:'Registos', icon:'list'},
+  {id:'importar', label:'Importar CSV', icon:'upload'},
+  {id:'integracoes', label:'Integrações', icon:'plug'},
+];
+const ICONS = {
+  grid:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>',
+  car:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 13l1.5-5A2 2 0 0 1 6.4 6.5h11.2a2 2 0 0 1 1.9 1.5L21 13"/><rect x="3" y="13" width="18" height="5" rx="1.5"/><circle cx="7.5" cy="18.5" r="1.5"/><circle cx="16.5" cy="18.5" r="1.5"/></svg>',
+  user:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="3.3"/><path d="M5 20c1-4 4-6 7-6s6 2 7 6"/></svg>',
+  list:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>',
+  upload:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>',
+  plug:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 3v5M15 3v5M7 8h10l-1 5a4 4 0 0 1-4 3.2A4 4 0 0 1 8 13z"/><path d="M12 16.5V21"/></svg>',
+};
+
+function renderNav(){
+  const nav=document.getElementById('nav');
+  nav.innerHTML = NAV_ITEMS.map(item=>`
+    <button class="nav-item ${currentView===item.id?'active':''}" data-view="${item.id}">
+      ${ICONS[item.icon]} ${item.label}
+    </button>`).join('');
+  nav.querySelectorAll('.nav-item').forEach(b=>b.addEventListener('click', ()=>{ currentView=b.dataset.view; render(); }));
+}
+
+const TITLES = {painel:'Painel', veiculos:'Veículos', motoristas:'Motoristas', registos:'Registos', importar:'Importar CSV', integracoes:'Integrações'};
+
+function render(){
+  renderNav();
+  document.getElementById('page-title').textContent = TITLES[currentView];
+  document.getElementById('topbar-meta').textContent = `Atualizado agora · ${state.entries.length} registos`;
+  const c=document.getElementById('content');
+  c.innerHTML='';
+  if(currentView==='painel') renderPainel(c);
+  else if(currentView==='veiculos') renderVeiculos(c);
+  else if(currentView==='motoristas') renderMotoristas(c);
+  else if(currentView==='registos') renderRegistos(c);
+  else if(currentView==='importar') renderImportar(c);
+  else if(currentView==='integracoes') renderIntegracoes(c);
+}
+
+/* ============================================================
+   HELPERS
+============================================================ */
+function money(v){ return (Number(v)||0).toLocaleString('pt-PT',{minimumFractionDigits:2, maximumFractionDigits:2})+' €'; }
+function esc(value){ return String(value??'').replace(/[&<>'"]/g, ch=>({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':'&quot;'}[ch])); }
+function driverName(id){ const d=state.drivers.find(x=>x.id===id); return d?d.nome:'—'; }
+function vehiclePlate(id){ const v=state.vehicles.find(x=>x.id===id); return v?v.matricula:'—'; }
+function entryNet(e){ return Number.isFinite(Number(e.liquido)) ? Number(e.liquido) : Number(e.bruto||0)-Number(e.despesas||0); }
+function normalizePlate(value){ return String(value||'').toUpperCase().replace(/[^A-Z0-9]/g,''); }
+function boltStatusToLocal(status){ return status==='active'?'Ativo':status==='suspended'?'Parado':status==='deactivated'?'Parado':'Parado'; }
+function unixToDate(ts){
+  if(!Number.isFinite(Number(ts))) return todayIso();
+  try { return new Intl.DateTimeFormat('sv-SE',{timeZone:'Europe/Lisbon',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(Number(ts)*1000)); }
+  catch { return new Date(Number(ts)*1000).toISOString().slice(0,10); }
+}
+function dateStartTs(date){ return Math.floor(new Date(`${date}T00:00:00`).getTime()/1000); }
+function dateEndExclusiveTs(date){ const d=new Date(`${date}T00:00:00`); d.setDate(d.getDate()+1); return Math.floor(d.getTime()/1000); }
+function lastNDays(n){
+  const out=[]; const today=new Date();
+  for(let i=n-1;i>=0;i--){ const d=new Date(today); d.setDate(d.getDate()-i); out.push(d.toISOString().slice(0,10)); }
+  return out;
+}
+
+/* ============================================================
+   VISTA: PAINEL
+============================================================ */
+function renderPainel(c){
+  const totalBruto = state.entries.reduce((s,e)=>s+Number(e.bruto||0),0);
+  const totalLiquido = state.entries.reduce((s,e)=>s+entryNet(e),0);
+  const totalViagens = state.entries.reduce((s,e)=>s+Number(e.viagens||0),0);
+  const uberLiquido = state.entries.filter(e=>e.plataforma==='Uber').reduce((s,e)=>s+entryNet(e),0);
+  const boltLiquido = state.entries.filter(e=>e.plataforma==='Bolt').reduce((s,e)=>s+entryNet(e),0);
+  const ativos = state.vehicles.filter(v=>v.estado==='Ativo').length;
+
+  const days = lastNDays(7);
+  const dayTotals = days.map(d=>{
+    const es = state.entries.filter(e=>e.data===d);
+    return { d, uber: es.filter(e=>e.plataforma==='Uber').reduce((s,e)=>s+entryNet(e),0), bolt: es.filter(e=>e.plataforma==='Bolt').reduce((s,e)=>s+entryNet(e),0) };
+  });
+  const maxDay = Math.max(1, ...dayTotals.map(x=>x.uber+x.bolt));
+
+  c.innerHTML = `
+    <div class="route-hero">
+      <svg viewBox="0 0 800 34" preserveAspectRatio="none">
+        <line x1="0" y1="17" x2="800" y2="17" stroke="var(--line)" stroke-width="2"/>
+        <line class="route-dash" x1="0" y1="17" x2="800" y2="17" stroke="var(--text-faint)" stroke-width="2"/>
+        <circle cx="40" cy="17" r="5" fill="var(--uber)"/>
+        <circle cx="760" cy="17" r="5" fill="var(--bolt)"/>
+      </svg>
+    </div>
+
+    <div class="grid kpi-grid">
+      <div class="kpi"><div class="kpi-label">Faturação bruta</div><div class="kpi-value">${money(totalBruto)}</div><div class="kpi-sub">${totalViagens} viagens · ${state.entries.length} movimentos</div></div>
+      <div class="kpi"><div class="kpi-label">Resultado líquido</div><div class="kpi-value">${money(totalLiquido)}</div><div class="kpi-sub">${money(totalViagens?totalLiquido/totalViagens:0)} por viagem</div></div>
+      <div class="kpi uber"><div class="kpi-label">Uber líquido</div><div class="kpi-value">${money(uberLiquido)}</div><div class="kpi-sub">${totalLiquido?Math.round(uberLiquido/totalLiquido*100):0}% do líquido</div></div>
+      <div class="kpi bolt"><div class="kpi-label">Bolt líquido</div><div class="kpi-value">${money(boltLiquido)}</div><div class="kpi-sub">${totalLiquido?Math.round(boltLiquido/totalLiquido*100):0}% do líquido</div></div>
+    </div>
+
+    <div class="grid" style="grid-template-columns:1.3fr 1fr;">
+      <div class="card">
+        <div style="font-family:var(--font-display); font-weight:600; font-size:16px; margin-bottom:14px;">Líquido — últimos 7 dias</div>
+        ${dayTotals.map(x=>`
+          <div class="mini-bar-row">
+            <div class="mini-bar-label">${x.d.slice(5)}</div>
+            <div class="mini-bar-track">
+              <div class="mini-bar-fill" style="width:${Math.max(0,x.uber/maxDay*100)}%; background:var(--uber);"></div>
+              <div class="mini-bar-fill" style="width:${Math.max(0,x.bolt/maxDay*100)}%; background:var(--bolt);"></div>
+            </div>
+            <div class="mini-bar-value">${money(x.uber+x.bolt)}</div>
+          </div>`).join('')}
+        <div style="display:flex; gap:16px; margin-top:10px; font-size:12px; color:var(--text-dim);">
+          <span><span class="badge-dot" style="background:var(--uber);"></span>Uber</span>
+          <span><span class="badge-dot" style="background:var(--bolt);"></span>Bolt</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div style="font-family:var(--font-display); font-weight:600; font-size:16px; margin-bottom:14px;">Estado da frota</div>
+        <div style="display:flex; flex-direction:column; gap:10px; font-size:13.5px;">
+          <div style="display:flex; justify-content:space-between;"><span>Veículos ativos</span><b class="num">${ativos} / ${state.vehicles.length}</b></div>
+          <div style="display:flex; justify-content:space-between;"><span>Motoristas</span><b class="num">${state.drivers.length}</b></div>
+          <div style="display:flex; justify-content:space-between;"><span>Viagens</span><b class="num">${totalViagens}</b></div>
+          <div style="display:flex; justify-content:space-between;"><span>Última sync Bolt</span><b class="num">${esc(state.settings.boltLastSync||'—')}</b></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section-title">Últimos registos</div>
+    ${entriesTable(state.entries.slice().sort((a,b)=>(b.data||'').localeCompare(a.data||'')).slice(0,8))}
+  `;
+}
+
+/* ============================================================
+   VISTA: VEÍCULOS
+============================================================ */
+function renderVeiculos(c){
+  c.innerHTML = `
+    <div class="toolbar">
+      <div class="toolbar-left"><span style="color:var(--text-dim); font-size:13px;">${state.vehicles.length} veículo(s)</span></div>
+      <button class="btn primary" id="add-vehicle">+ Adicionar veículo</button>
+    </div>
+    <div id="vehicles-table"></div>
+  `;
+  document.getElementById('add-vehicle').addEventListener('click', ()=>openVehicleModal());
+  renderVehiclesTable();
+}
+function renderVehiclesTable(){
+  const wrap = document.getElementById('vehicles-table');
+  if (state.vehicles.length===0){
+    wrap.innerHTML = emptyState('Ainda sem veículos.', 'car');
+    return;
+  }
+  wrap.innerHTML = `<div class="table-wrap"><table>
+    <thead><tr><th>Matrícula</th><th>Modelo</th><th>Ano</th><th>Motorista</th><th>Estado</th><th></th></tr></thead>
+    <tbody>${state.vehicles.map(v=>`
+      <tr>
+        <td class="num">${esc(v.matricula)}</td>
+        <td>${esc(v.modelo)}</td>
+        <td class="num">${v.ano||'—'}</td>
+        <td>${esc(driverName(v.driverId))}</td>
+        <td><span class="pill ${v.estado==='Ativo'?'ativo':v.estado==='Manutenção'?'manutencao':'parado'}">${v.estado}</span></td>
+        <td style="text-align:right; white-space:nowrap;">
+          <button class="icon-btn" onclick="openVehicleModal('${esc(v.id)}')">${editIcon()}</button>
+          <button class="icon-btn" onclick="deleteItem('vehicles','${esc(v.id)}')">${trashIcon()}</button>
+        </td>
+      </tr>`).join('')}</tbody>
+  </table></div>`;
+}
+function openVehicleModal(id){
+  const v = id ? state.vehicles.find(x=>x.id===id) : {matricula:'',modelo:'',ano:'',driverId:'',estado:'Ativo'};
+  openModal(`
+    <h3>${id?'Editar veículo':'Novo veículo'}</h3>
+    <div class="field-row">
+      <div class="field"><label>Matrícula</label><input id="f-matricula" value="${esc(v.matricula||'')}" placeholder="AA-00-BB"></div>
+      <div class="field"><label>Ano</label><input id="f-ano" type="number" value="${esc(v.ano||'')}" placeholder="2022"></div>
+    </div>
+    <div class="field"><label>Modelo</label><input id="f-modelo" value="${esc(v.modelo||'')}" placeholder="Toyota Corolla Hybrid"></div>
+    <div class="field"><label>Motorista atribuído</label>
+      <select id="f-driver"><option value="">— Nenhum —</option>${state.drivers.map(d=>`<option value="${esc(d.id)}" ${d.id===v.driverId?'selected':''}>${esc(d.nome)}</option>`).join('')}</select>
+    </div>
+    <div class="field"><label>Estado</label>
+      <select id="f-estado">${['Ativo','Manutenção','Parado'].map(o=>`<option ${o===v.estado?'selected':''}>${o}</option>`).join('')}</select>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn primary" id="save-vehicle">Guardar</button>
+    </div>
+  `);
+  document.getElementById('save-vehicle').addEventListener('click', ()=>{
+    const matricula=document.getElementById('f-matricula').value.trim();
+    if(!matricula){ toast('Indica a matrícula.'); return; }
+    const data={
+      id: id||uid(),
+      matricula, modelo:document.getElementById('f-modelo').value.trim(),
+      ano:document.getElementById('f-ano').value, driverId:document.getElementById('f-driver').value,
+      estado:document.getElementById('f-estado').value,
+    };
+    if(id){ state.vehicles = state.vehicles.map(x=>x.id===id?data:x); }
+    else state.vehicles.push(data);
+    save('vehicles'); closeModal(); render();
+  });
+}
+
+/* ============================================================
+   VISTA: MOTORISTAS
+============================================================ */
+function renderMotoristas(c){
+  c.innerHTML = `
+    <div class="toolbar">
+      <div class="toolbar-left"><span style="color:var(--text-dim); font-size:13px;">${state.drivers.length} motorista(s)</span></div>
+      <button class="btn primary" id="add-driver">+ Adicionar motorista</button>
+    </div>
+    <div id="drivers-table"></div>
+  `;
+  document.getElementById('add-driver').addEventListener('click', ()=>openDriverModal());
+  renderDriversTable();
+}
+function renderDriversTable(){
+  const wrap = document.getElementById('drivers-table');
+  if (state.drivers.length===0){ wrap.innerHTML = emptyState('Ainda sem motoristas.', 'user'); return; }
+  wrap.innerHTML = `<div class="table-wrap"><table>
+    <thead><tr><th>Nome</th><th>Contacto</th><th>Veículo</th><th>Plataformas</th><th>Licença TVDE</th><th></th></tr></thead>
+    <tbody>${state.drivers.map(d=>`
+      <tr>
+        <td>${esc(d.nome)}</td>
+        <td class="num">${esc(d.contacto||'—')}</td>
+        <td class="num">${esc(vehiclePlate(d.vehicleId))}</td>
+        <td>${(d.plataformas||[]).map(p=>`<span class="pill ${p.toLowerCase()}">${p}</span>`).join(' ')}</td>
+        <td class="num">${esc(d.licenca||'—')}</td>
+        <td style="text-align:right; white-space:nowrap;">
+          <button class="icon-btn" onclick="openDriverModal('${esc(d.id)}')">${editIcon()}</button>
+          <button class="icon-btn" onclick="deleteItem('drivers','${esc(d.id)}')">${trashIcon()}</button>
+        </td>
+      </tr>`).join('')}</tbody>
+  </table></div>`;
+}
+function openDriverModal(id){
+  const d = id ? state.drivers.find(x=>x.id===id) : {nome:'',contacto:'',vehicleId:'',plataformas:[],licenca:''};
+  openModal(`
+    <h3>${id?'Editar motorista':'Novo motorista'}</h3>
+    <div class="field"><label>Nome</label><input id="f-nome" value="${esc(d.nome||'')}" placeholder="Nome completo"></div>
+    <div class="field-row">
+      <div class="field"><label>Contacto</label><input id="f-contacto" value="${esc(d.contacto||'')}" placeholder="9XX XXX XXX"></div>
+      <div class="field"><label>Licença TVDE</label><input id="f-licenca" value="${esc(d.licenca||'')}" placeholder="TVDE-0000"></div>
+    </div>
+    <div class="field"><label>Veículo atribuído</label>
+      <select id="f-vehicle"><option value="">— Nenhum —</option>${state.vehicles.map(v=>`<option value="${esc(v.id)}" ${v.id===d.vehicleId?'selected':''}>${esc(v.matricula)}</option>`).join('')}</select>
+    </div>
+    <div class="field"><label>Plataformas ativas</label>
+      <div style="display:flex; gap:14px; margin-top:4px;">
+        <label style="display:flex; align-items:center; gap:6px; font-size:13px; color:var(--text);"><input type="checkbox" id="f-uber" ${(d.plataformas||[]).includes('Uber')?'checked':''}> Uber</label>
+        <label style="display:flex; align-items:center; gap:6px; font-size:13px; color:var(--text);"><input type="checkbox" id="f-bolt" ${(d.plataformas||[]).includes('Bolt')?'checked':''}> Bolt</label>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn primary" id="save-driver">Guardar</button>
+    </div>
+  `);
+  document.getElementById('save-driver').addEventListener('click', ()=>{
+    const nome=document.getElementById('f-nome').value.trim();
+    if(!nome){ toast('Indica o nome.'); return; }
+    const plataformas=[];
+    if(document.getElementById('f-uber').checked) plataformas.push('Uber');
+    if(document.getElementById('f-bolt').checked) plataformas.push('Bolt');
+    const data={ id:id||uid(), nome, contacto:document.getElementById('f-contacto').value.trim(),
+      vehicleId:document.getElementById('f-vehicle').value, plataformas, licenca:document.getElementById('f-licenca').value.trim() };
+    if(id){ state.drivers = state.drivers.map(x=>x.id===id?data:x); } else state.drivers.push(data);
+    save('drivers'); closeModal(); render();
+  });
+}
+
+/* ============================================================
+   VISTA: REGISTOS (ganhos/viagens)
+============================================================ */
+function entriesTable(list){
+  if(list.length===0) return emptyState('Ainda sem registos.', 'list');
+  return `<div class="table-wrap"><table>
+    <thead><tr><th>Data</th><th>Plataforma</th><th>Motorista</th><th>Veículo</th><th>Viagens</th><th>Bruto</th><th>Comissão/ajustes</th><th>Líquido</th><th></th></tr></thead>
+    <tbody>${list.map(e=>`
+      <tr title="${esc(e.status||e.source||'')}">
+        <td class="num">${esc(e.data)}</td>
+        <td><span class="pill ${String(e.plataforma||'').toLowerCase()}">${esc(e.plataforma)}</span></td>
+        <td>${esc(driverName(e.driverId))}</td>
+        <td class="num">${esc(vehiclePlate(e.vehicleId))}</td>
+        <td class="num">${Number(e.viagens||0)}</td>
+        <td class="num">${money(e.bruto)}</td>
+        <td class="num">${money(e.despesas)}</td>
+        <td class="num">${money(entryNet(e))}</td>
+        <td style="text-align:right; white-space:nowrap;">
+          <button class="icon-btn" onclick="deleteItem('entries','${esc(e.id)}')">${trashIcon()}</button>
+        </td>
+      </tr>`).join('')}</tbody>
+  </table></div>`;
+}
+function renderRegistos(c){
+  c.innerHTML = `
+    <div class="toolbar">
+      <div class="toolbar-left"><span style="color:var(--text-dim); font-size:13px;">${state.entries.length} registo(s)</span></div>
+      <button class="btn primary" id="add-entry">+ Novo registo manual</button>
+    </div>
+    <div id="entries-table"></div>
+  `;
+  document.getElementById('add-entry').addEventListener('click', ()=>openEntryModal());
+  document.getElementById('entries-table').innerHTML = entriesTable(state.entries.slice().sort((a,b)=>b.data.localeCompare(a.data)));
+}
+function openEntryModal(){
+  const today=new Date().toISOString().slice(0,10);
+  openModal(`
+    <h3>Novo registo</h3>
+    <div class="field-row">
+      <div class="field"><label>Data</label><input id="f-data" type="date" value="${today}"></div>
+      <div class="field"><label>Plataforma</label><select id="f-plataforma"><option>Uber</option><option>Bolt</option></select></div>
+    </div>
+    <div class="field-row">
+      <div class="field"><label>Motorista</label><select id="f-e-driver"><option value="">—</option>${state.drivers.map(d=>`<option value="${esc(d.id)}">${esc(d.nome)}</option>`).join('')}</select></div>
+      <div class="field"><label>Veículo</label><select id="f-e-vehicle"><option value="">—</option>${state.vehicles.map(v=>`<option value="${esc(v.id)}">${esc(v.matricula)}</option>`).join('')}</select></div>
+    </div>
+    <div class="field-row">
+      <div class="field"><label>Nº viagens</label><input id="f-viagens" type="number" min="0" value="0"></div>
+      <div class="field"><label>Horas online</label><input id="f-horas" type="number" min="0" step="0.1" value="0"></div>
+    </div>
+    <div class="field-row">
+      <div class="field"><label>Faturação bruta (€)</label><input id="f-bruto" type="number" min="0" step="0.01" value="0"></div>
+      <div class="field"><label>Despesas (€)</label><input id="f-despesas" type="number" min="0" step="0.01" value="0"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn primary" id="save-entry">Guardar</button>
+    </div>
+  `);
+  document.getElementById('save-entry').addEventListener('click', ()=>{
+    const data = {
+      id:uid(), data:document.getElementById('f-data').value, plataforma:document.getElementById('f-plataforma').value,
+      driverId:document.getElementById('f-e-driver').value, vehicleId:document.getElementById('f-e-vehicle').value,
+      viagens:Number(document.getElementById('f-viagens').value)||0, horas:Number(document.getElementById('f-horas').value)||0,
+      bruto:Number(document.getElementById('f-bruto').value)||0, despesas:Number(document.getElementById('f-despesas').value)||0,
+    };
+    state.entries.push(data); save('entries'); closeModal(); render();
+  });
+}
+
+/* ============================================================
+   VISTA: IMPORTAR CSV
+============================================================ */
+function renderImportar(c){
+  c.innerHTML = `
+    <div class="info-card">
+      <b>Como funciona:</b> a Uber e a Bolt permitem exportar o histórico de viagens/ganhos em CSV a partir da app ou do portal do condutor
+      (na Uber: app → Ganhos → Extrato; na Bolt: app → Ganhos → Exportar). Carrega esse ficheiro aqui para juntar tudo num único registo,
+      sem precisar de nenhuma chave de API.
+    </div>
+    <div class="field" style="max-width:220px; margin-bottom:14px;">
+      <label>Plataforma do ficheiro</label>
+      <select id="csv-platform"><option>Uber</option><option>Bolt</option></select>
+    </div>
+    <div class="csv-drop" id="csv-drop">
+      ${ICONS.upload.replace('width="16" height="16"','width="26" height="26"')}
+      <p style="margin-top:10px;">Arrasta o ficheiro CSV para aqui, ou clica para escolher</p>
+      <input type="file" id="csv-input" accept=".csv" class="hidden">
+    </div>
+    <div id="csv-preview"></div>
+  `;
+  const drop=document.getElementById('csv-drop'), input=document.getElementById('csv-input');
+  drop.addEventListener('click', ()=>input.click());
+  drop.addEventListener('dragover', e=>{ e.preventDefault(); drop.classList.add('drag'); });
+  drop.addEventListener('dragleave', ()=>drop.classList.remove('drag'));
+  drop.addEventListener('drop', e=>{ e.preventDefault(); drop.classList.remove('drag'); if(e.dataTransfer.files[0]) handleCsv(e.dataTransfer.files[0]); });
+  input.addEventListener('change', e=>{ if(e.target.files[0]) handleCsv(e.target.files[0]); });
+}
+let csvParsedRows = [];
+function handleCsv(file){
+  Papa.parse(file, {
+    header:true, skipEmptyLines:true,
+    complete: (res)=>{
+      csvParsedRows = res.data;
+      renderCsvPreview(res.meta.fields||[]);
+    },
+    error: ()=> toast('Não foi possível ler o ficheiro CSV.'),
+  });
+}
+function renderCsvPreview(fields){
+  const wrap = document.getElementById('csv-preview');
+  if(csvParsedRows.length===0){ wrap.innerHTML = `<p style="color:var(--text-faint); margin-top:16px;">Ficheiro vazio ou sem linhas reconhecidas.</p>`; return; }
+  wrap.innerHTML = `
+    <div class="section-title">Associar colunas</div>
+    <p style="font-size:12.5px; color:var(--text-dim); margin-bottom:12px;">${csvParsedRows.length} linha(s) encontradas. Indica qual coluna do teu ficheiro corresponde a cada campo.</p>
+    <div class="card" style="margin-bottom:16px;">
+      <div class="field-row">
+        <div class="field"><label>Coluna da data</label><select id="map-data">${fields.map(f=>`<option>${esc(f)}</option>`).join('')}</select></div>
+        <div class="field"><label>Coluna do valor (€)</label><select id="map-valor">${fields.map(f=>`<option>${esc(f)}</option>`).join('')}</select></div>
+      </div>
+      <div class="field"><label>Coluna do nº de viagens (opcional)</label><select id="map-viagens"><option value="">— Nenhuma (assume 1 por linha) —</option>${fields.map(f=>`<option>${esc(f)}</option>`).join('')}</select></div>
+      <button class="btn primary" id="confirm-import" style="margin-top:6px;">Importar ${csvParsedRows.length} linha(s)</button>
+    </div>
+  `;
+  document.getElementById('confirm-import').addEventListener('click', ()=>{
+    const dataCol=document.getElementById('map-data').value;
+    const valorCol=document.getElementById('map-valor').value;
+    const viagensCol=document.getElementById('map-viagens').value;
+    const plataforma=document.getElementById('csv-platform').value;
+    let count=0;
+    csvParsedRows.forEach(row=>{
+      const rawDate=row[dataCol]; const rawValor=row[valorCol];
+      if(!rawDate || rawValor===undefined) return;
+      const parsedDate = normalizeDate(rawDate);
+      const valor = parseFloat(String(rawValor).replace(',','.').replace(/[^\d.-]/g,''));
+      if(!parsedDate || isNaN(valor)) return;
+      state.entries.push({
+        id:uid(), data:parsedDate, plataforma, driverId:'', vehicleId:'',
+        viagens: viagensCol ? (Number(row[viagensCol])||1) : 1,
+        horas:0, bruto: valor, despesas:0,
+      });
+      count++;
+    });
+    save('entries');
+    toast(`${count} registo(s) importado(s) com sucesso.`);
+    csvParsedRows=[]; render(); currentView='registos'; render();
+  });
+}
+function normalizeDate(str){
+  str=String(str).trim();
+  let m = str.match(/^(\d{4})-(\d{2})-(\d{2})/); if(m) return `${m[1]}-${m[2]}-${m[3]}`;
+  m = str.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/); if(m) return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;
+  const d = new Date(str); if(!isNaN(d)) return d.toISOString().slice(0,10);
+  return null;
+}
+
+/* ============================================================
+   VISTA: INTEGRAÇÕES BOLT
+============================================================ */
+function renderIntegracoes(c){
+  const s={...DEFAULT_SETTINGS,...state.settings};
+  c.innerHTML = `
+    <div class="info-card">
+      A ligação à Bolt é oficial e usa OAuth2. O <b>client_secret fica apenas no Cloudflare Worker</b>.
+      Este painel guarda somente o URL do Worker, o company_id e os dados sincronizados. Protege também o Worker com <b>Cloudflare Access</b>:
+      limitar CORS, por si só, não impede pedidos feitos fora do browser.
+    </div>
+
+    <div class="card" style="max-width:760px;">
+      <div class="field">
+        <label>URL do proxy seguro Bolt</label>
+        <input id="s-bolt-proxy" value="${esc(s.boltProxyUrl)}" placeholder="https://bolt-fleet-proxy.teu-dominio.pt">
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Company ID</label><input id="s-bolt-company" type="number" min="1" value="${esc(s.boltCompanyId)}" placeholder="Descobrir automaticamente"></div>
+        <div class="field"><label>Moeda</label><select id="s-moeda"><option value="EUR">EUR (€)</option></select></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Desde</label><input id="s-bolt-start" type="date" value="${esc(s.boltStartDate)}"></div>
+        <div class="field"><label>Até, inclusive</label><input id="s-bolt-end" type="date" value="${esc(s.boltEndDate)}"></div>
+      </div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button class="btn" id="save-settings">Guardar</button>
+        <button class="btn" id="test-bolt-proxy">Testar ligação</button>
+        <button class="btn" id="discover-company">Descobrir empresa</button>
+        <button class="btn primary" id="sync-all-bolt">Sincronizar tudo</button>
+      </div>
+      <div id="bolt-test-result" style="margin-top:12px; font-size:13px;"></div>
+      <pre id="bolt-sync-log" style="margin-top:12px; background:var(--bg); border:1px solid var(--line); border-radius:7px; padding:12px; font-family:var(--font-mono); font-size:12px; max-height:260px; overflow:auto; white-space:pre-wrap; color:var(--text-dim);">Pronto.</pre>
+    </div>
+
+    <div class="section-title">Sincronização seletiva</div>
+    <div class="card" style="max-width:760px; display:flex; gap:8px; flex-wrap:wrap;">
+      <button class="btn" id="sync-drivers">Motoristas</button>
+      <button class="btn" id="sync-vehicles">Veículos</button>
+      <button class="btn" id="sync-orders">Viagens e valores</button>
+    </div>
+
+    <details style="max-width:760px; margin-top:24px;">
+      <summary class="section-title" style="cursor:pointer;">Explorador API avançado</summary>
+      <p style="font-size:12.5px; color:var(--text-dim); margin-bottom:12px;">
+        Os corpos abaixo já respeitam os campos obrigatórios do OpenAPI fornecido pela Bolt.
+      </p>
+      <div class="card">
+        <div class="field">
+          <label>Endpoint</label>
+          <select id="api-endpoint">
+            <option value="getCompanies" data-method="GET">Empresas — getCompanies</option>
+            <option value="test" data-method="POST">Teste oficial — test</option>
+            <option value="getDrivers" data-method="POST">Motoristas — getDrivers</option>
+            <option value="getVehicles" data-method="POST">Veículos — getVehicles</option>
+            <option value="getFleetOrders" data-method="POST">Viagens — getFleetOrders</option>
+            <option value="getFleetStateLogs" data-method="POST">Estados — getFleetStateLogs</option>
+          </select>
+        </div>
+        <div class="field" id="api-body-field">
+          <label>Corpo JSON</label>
+          <textarea id="api-body" rows="9" style="font-family:var(--font-mono); font-size:12.5px;"></textarea>
+        </div>
+        <button class="btn primary" id="api-send">Enviar pedido</button>
+        <pre id="api-response" style="margin-top:12px; background:var(--bg); border:1px solid var(--line); border-radius:7px; padding:12px; font-family:var(--font-mono); font-size:12px; max-height:360px; overflow:auto; white-space:pre-wrap; color:var(--text-dim);">—</pre>
+      </div>
+    </details>
+
+    <div class="section-title">Dados locais</div>
+    <div class="card" style="max-width:760px; display:flex; justify-content:space-between; align-items:center; gap:16px;">
+      <div style="font-size:13px; color:var(--text-dim);">Apaga veículos, motoristas e registos guardados neste navegador. Não elimina nada na Bolt.</div>
+      <button class="btn danger" id="reset-all">Repor tudo</button>
+    </div>
+  `;
+
+  const persistSettings = async () => {
+    const proxyUrl=document.getElementById('s-bolt-proxy').value.trim().replace(/\/$/,'');
+    if(proxyUrl && !/^https:\/\//i.test(proxyUrl) && !/^http:\/\/(localhost|127\.0\.0\.1)/i.test(proxyUrl)){
+      throw new Error('O URL do proxy deve usar HTTPS.');
+    }
+    state.settings={
+      ...state.settings,
+      moeda:document.getElementById('s-moeda').value,
+      boltProxyUrl:proxyUrl,
+      boltCompanyId:document.getElementById('s-bolt-company').value.trim(),
+      boltStartDate:document.getElementById('s-bolt-start').value,
+      boltEndDate:document.getElementById('s-bolt-end').value,
+    };
+    await save('settings');
+  };
+
+  document.getElementById('save-settings').addEventListener('click', async()=>{
+    try{ await persistSettings(); toast('Definições guardadas.'); }
+    catch(e){ toast(e.message); }
+  });
+
+  document.getElementById('test-bolt-proxy').addEventListener('click', async()=>{
+    const result=document.getElementById('bolt-test-result');
+    try{
+      await persistSettings(); result.textContent='A testar…';
+      const data=await boltFetch('/test','GET');
+      result.textContent='✓ '+(data.message||'Ligação estabelecida.');
+      result.style.color='var(--bolt)';
+    }catch(e){ result.textContent='✗ '+e.message; result.style.color='var(--danger)'; }
+  });
+
+  document.getElementById('discover-company').addEventListener('click', async()=>{
+    try{ await persistSettings(); await discoverBoltCompany(true); }
+    catch(e){ syncLog('Erro: '+e.message, true); }
+  });
+  document.getElementById('sync-drivers').addEventListener('click', ()=>runBoltAction(syncBoltDrivers));
+  document.getElementById('sync-vehicles').addEventListener('click', ()=>runBoltAction(syncBoltVehicles));
+  document.getElementById('sync-orders').addEventListener('click', ()=>runBoltAction(syncBoltOrders));
+  document.getElementById('sync-all-bolt').addEventListener('click', async()=>{
+    try{
+      await persistSettings();
+      syncLog('A iniciar sincronização completa…', true);
+      if(!Number(state.settings.boltCompanyId)) await discoverBoltCompany(false);
+      await syncBoltDrivers();
+      await syncBoltVehicles();
+      await syncBoltOrders();
+      state.settings.boltLastSync=new Date().toLocaleString('pt-PT');
+      await save('settings');
+      syncLog('Sincronização completa concluída.');
+      toast('Bolt sincronizada com sucesso.');
+      render();
+    }catch(e){ syncLog('Erro: '+e.message); }
+  });
+
+  setupApiExplorer();
+  document.getElementById('reset-all').addEventListener('click', ()=>{
+    if(!confirm('Tens a certeza? Esta ação apaga todos os dados guardados localmente.')) return;
+    state.vehicles=[]; state.drivers=[]; state.entries=[];
+    save('vehicles'); save('drivers'); save('entries');
+    toast('Dados locais apagados.'); render();
+  });
+}
+
+function syncLog(message, replace=false){
+  const el=document.getElementById('bolt-sync-log');
+  if(!el) return;
+  const line=`[${new Date().toLocaleTimeString('pt-PT')}] ${message}`;
+  el.textContent=replace?line:`${el.textContent}\n${line}`;
+  el.scrollTop=el.scrollHeight;
+}
+
+async function runBoltAction(fn){
+  try{
+    const proxy=document.getElementById('s-bolt-proxy')?.value.trim().replace(/\/$/,'');
+    const company=document.getElementById('s-bolt-company')?.value.trim();
+    const start=document.getElementById('s-bolt-start')?.value;
+    const end=document.getElementById('s-bolt-end')?.value;
+    state.settings={...state.settings,boltProxyUrl:proxy,boltCompanyId:company,boltStartDate:start,boltEndDate:end};
+    await save('settings');
+    await fn();
+    state.settings.boltLastSync=new Date().toLocaleString('pt-PT');
+    await save('settings');
+    toast('Sincronização concluída.');
+    render();
+  }catch(e){ syncLog('Erro: '+e.message); }
+}
+
+function boltConfig(){
+  const proxyUrl=String(state.settings.boltProxyUrl||'').trim().replace(/\/$/,'');
+  const companyId=Number(state.settings.boltCompanyId);
+  const startDate=state.settings.boltStartDate;
+  const endDate=state.settings.boltEndDate;
+  if(!proxyUrl) throw new Error('Define primeiro o URL do proxy.');
+  if(!startDate||!endDate) throw new Error('Indica o intervalo de datas.');
+  const startTs=dateStartTs(startDate), endTs=dateEndExclusiveTs(endDate);
+  if(startTs>=endTs) throw new Error('A data inicial deve ser anterior ou igual à data final.');
+  return {proxyUrl,companyId,startTs,endTs};
+}
+
+async function boltFetch(path, method='GET', body=null){
+  const {proxyUrl}=boltConfig();
+  const options={method,credentials:'include',headers:{Accept:'application/json'}};
+  if(body!==null){ options.headers['Content-Type']='application/json'; options.body=JSON.stringify(body); }
+  const res=await fetch(`${proxyUrl}${path}`,options);
+  const text=await res.text();
+  let data; try{ data=JSON.parse(text); }catch{ data=null; }
+  if(!res.ok){
+    const msg=data?.error?.message||data?.message||text||`HTTP ${res.status}`;
+    const boltCode=data?.error?.details?.upstream_response?.code;
+    throw new Error(`${msg}${boltCode?` (código Bolt ${boltCode})`:''}`);
+  }
+  if(!data) throw new Error('O proxy devolveu uma resposta inválida.');
+  return data;
+}
+
+async function discoverBoltCompany(showLog=true){
+  if(showLog) syncLog('A consultar empresas autorizadas…', true);
+  const data=await boltFetch('/api/companies','GET');
+  const ids=data?.data?.company_ids;
+  if(!Array.isArray(ids)||!ids.length) throw new Error('A Bolt não devolveu qualquer company_id.');
+  state.settings.boltCompanyId=String(ids[0]);
+  await save('settings');
+  const input=document.getElementById('s-bolt-company'); if(input) input.value=ids[0];
+  syncLog(`Company ID encontrado: ${ids[0]}${ids.length>1?` (${ids.length} empresas disponíveis)`:''}.`);
+  return ids[0];
+}
+
+async function fetchBoltPages(path, baseBody, listKey, limit, totalKey=null){
+  const all=[]; let offset=0; let page=0;
+  while(page<100){
+    const payload=await boltFetch(path,'POST',{...baseBody,offset,limit});
+    const rows=payload?.data?.[listKey];
+    if(!Array.isArray(rows)) throw new Error(`A resposta da Bolt não contém data.${listKey}.`);
+    all.push(...rows); page++;
+    const total=totalKey?Number(payload?.data?.[totalKey]):NaN;
+    offset+=rows.length;
+    if(rows.length<limit || (Number.isFinite(total)&&offset>=total) || rows.length===0) break;
+  }
+  if(page>=100) throw new Error('A paginação atingiu o limite de segurança de 100 páginas.');
+  return all;
+}
+
+function ensureCompanyId(){
+  const id=Number(state.settings.boltCompanyId);
+  if(!Number.isInteger(id)||id<=0) throw new Error('Descobre ou indica primeiro um company_id válido.');
+  return id;
+}
+
+function upsertBoltVehicle(v){
+  const uuid=v.uuid||null, boltId=v.id??null, plate=v.reg_number||'';
+  let existing=state.vehicles.find(x=>(uuid&&x.boltVehicleUuid===uuid)||(boltId!=null&&String(x.boltVehicleId)===String(boltId))||(plate&&normalizePlate(x.matricula)===normalizePlate(plate)));
+  const data={
+    ...(existing||{}), id:existing?.id||uid(), matricula:plate||existing?.matricula||'Sem matrícula',
+    modelo:v.model||existing?.modelo||'', ano:v.year||existing?.ano||'', estado:boltStatusToLocal(v.state),
+    driverId:existing?.driverId||'', boltVehicleId:boltId, boltVehicleUuid:uuid, boltState:v.state||'',
+    vin:v.vin||existing?.vin||'', lugares:v.seats??existing?.lugares??'', sourceBolt:true,
+  };
+  if(existing) state.vehicles=state.vehicles.map(x=>x.id===existing.id?data:x); else state.vehicles.push(data);
+  return data;
+}
+
+function upsertBoltDriver(d){
+  const name=[d.first_name,d.last_name].filter(Boolean).join(' ').trim()||d.phone||'Motorista Bolt';
+  let existing=state.drivers.find(x=>(d.driver_uuid&&x.boltDriverUuid===d.driver_uuid)||(d.partner_uuid&&x.boltPartnerUuid===d.partner_uuid)||(d.phone&&x.contacto===d.phone));
+  let activeVehicle=null;
+  if(d.active_vehicle) activeVehicle=upsertBoltVehicle({
+    id:d.active_vehicle.id, model:d.active_vehicle.model, year:d.active_vehicle.year,
+    reg_number:d.active_vehicle.reg_number, vin:d.active_vehicle.vin, uuid:d.active_vehicle.uuid,
+    state:d.active_vehicle.state, seats:null,
+  });
+  const platforms=Array.from(new Set([...(existing?.plataformas||[]),'Bolt']));
+  const data={
+    ...(existing||{}), id:existing?.id||uid(), nome:name, contacto:d.phone||existing?.contacto||'',
+    email:d.email||existing?.email||'', vehicleId:activeVehicle?.id||existing?.vehicleId||'', plataformas,
+    licenca:existing?.licenca||'', boltDriverUuid:d.driver_uuid||null, boltPartnerUuid:d.partner_uuid||null,
+    boltState:d.state||'', rating:d.driver_rating??null, score:d.driver_score??null, sourceBolt:true,
+  };
+  if(existing) state.drivers=state.drivers.map(x=>x.id===existing.id?data:x); else state.drivers.push(data);
+  if(activeVehicle){
+    state.vehicles=state.vehicles.map(v=>v.id===activeVehicle.id?{...v,driverId:data.id}:v);
+  }
+  return data;
+}
+
+async function syncBoltDrivers(){
+  const {startTs,endTs}=boltConfig(); const companyId=ensureCompanyId();
+  syncLog('A sincronizar motoristas…');
+  const rows=await fetchBoltPages('/api/drivers',{company_id:companyId,start_ts:startTs,end_ts:endTs},'drivers',1000);
+  rows.forEach(upsertBoltDriver);
+  await save('drivers'); await save('vehicles');
+  syncLog(`${rows.length} motorista(s) recebidos da Bolt.`);
+  return rows;
+}
+
+async function syncBoltVehicles(){
+  const {startTs,endTs}=boltConfig(); const companyId=ensureCompanyId();
+  syncLog('A sincronizar veículos…');
+  const rows=await fetchBoltPages('/api/vehicles',{company_id:companyId,start_ts:startTs,end_ts:endTs},'vehicles',100);
+  rows.forEach(upsertBoltVehicle);
+  await save('vehicles');
+  syncLog(`${rows.length} veículo(s) recebidos da Bolt.`);
+  return rows;
+}
+
+function sumNumbers(...values){ return values.reduce((s,v)=>s+(Number.isFinite(Number(v))?Number(v):0),0); }
+function findOrCreateOrderDriver(order){
+  let driver=state.drivers.find(d=>order.driver_uuid&&d.boltDriverUuid===order.driver_uuid);
+  if(!driver&&order.driver_phone) driver=state.drivers.find(d=>d.contacto===order.driver_phone);
+  if(!driver){
+    driver={id:uid(),nome:order.driver_name||'Motorista Bolt',contacto:order.driver_phone||'',vehicleId:'',plataformas:['Bolt'],licenca:'',boltDriverUuid:order.driver_uuid||null,sourceBolt:true};
+    state.drivers.push(driver);
+  }
+  return driver;
+}
+function findOrCreateOrderVehicle(order){
+  const plate=order.vehicle_license_plate||'';
+  let vehicle=state.vehicles.find(v=>plate&&normalizePlate(v.matricula)===normalizePlate(plate));
+  if(!vehicle&&plate){
+    vehicle={id:uid(),matricula:plate,modelo:order.vehicle_model||'',ano:'',driverId:'',estado:'Ativo',sourceBolt:true};
+    state.vehicles.push(vehicle);
+  }
+  return vehicle||null;
+}
+function upsertBoltOrder(order){
+  const externalId=String(order.order_reference||'');
+  if(!externalId) return false;
+  const driver=findOrCreateOrderDriver(order), vehicle=findOrCreateOrderVehicle(order);
+  const p=order.order_price||{};
+  const gross=sumNumbers(p.ride_price,p.booking_fee,p.toll_fee,p.cancellation_fee,p.tip);
+  const net=Number.isFinite(Number(p.net_earnings))?Number(p.net_earnings):gross-Math.abs(Number(p.commission||0));
+  const expenses=Math.max(0,gross-net);
+  const ts=order.payment_confirmed_timestamp||order.order_finished_timestamp||order.order_created_timestamp;
+  const data={
+    id:uid(), externalId, data:unixToDate(ts), plataforma:'Bolt', driverId:driver.id, vehicleId:vehicle?.id||'',
+    viagens:order.order_status==='finished'?1:0, horas:0, bruto:gross, despesas:expenses, liquido:net,
+    commission:Number(p.commission||0), tip:Number(p.tip||0), tollFee:Number(p.toll_fee||0),
+    status:order.order_status||'', distance:Number(order.ride_distance||0), paymentMethod:order.payment_method||'',
+    category:order.category_info?.name||'', source:'Bolt API', updatedAt:new Date().toISOString(),
+  };
+  const existing=state.entries.find(e=>e.plataforma==='Bolt'&&e.externalId===externalId);
+  if(existing){ data.id=existing.id; state.entries=state.entries.map(e=>e.id===existing.id?{...existing,...data}:e); }
+  else state.entries.push(data);
+  return !existing;
+}
+
+async function syncBoltOrders(){
+  const {startTs,endTs}=boltConfig(); const companyId=ensureCompanyId();
+  syncLog('A sincronizar viagens e valores…');
+  const rows=await fetchBoltPages('/api/orders',{
+    company_id:companyId, company_ids:[companyId], start_ts:startTs, end_ts:endTs,
+    time_range_filter_type:'price_review',
+  },'orders',1000,'total_orders');
+  let created=0; rows.forEach(order=>{ if(upsertBoltOrder(order)) created++; });
+  await save('drivers'); await save('vehicles'); await save('entries');
+  syncLog(`${rows.length} viagem(ns) recebida(s): ${created} nova(s), ${rows.length-created} atualizada(s).`);
+  return rows;
+}
+
+function currentApiTemplates(){
+  let companyId=Number(state.settings.boltCompanyId)||0;
+  const startTs=dateStartTs(state.settings.boltStartDate||daysAgoIso(7));
+  const endTs=dateEndExclusiveTs(state.settings.boltEndDate||todayIso());
+  return {
+    getCompanies:null,
+    test:{company_ids:companyId?[companyId]:[],start_ts:startTs,end_ts:endTs,offset:0,limit:50},
+    getDrivers:{company_id:companyId,start_ts:startTs,end_ts:endTs,offset:0,limit:50},
+    getVehicles:{company_id:companyId,start_ts:startTs,end_ts:endTs,offset:0,limit:50},
+    getFleetOrders:{company_id:companyId,company_ids:companyId?[companyId]:[],start_ts:startTs,end_ts:endTs,time_range_filter_type:'price_review',offset:0,limit:50},
+    getFleetStateLogs:{company_id:companyId,start_ts:startTs,end_ts:endTs,offset:0,limit:50},
+  };
+}
+
+function setupApiExplorer(){
+  const select=document.getElementById('api-endpoint');
+  const bodyField=document.getElementById('api-body-field');
+  const bodyArea=document.getElementById('api-body');
+  const responseEl=document.getElementById('api-response');
+  function refresh(){
+    const isGet=select.selectedOptions[0].dataset.method==='GET';
+    bodyField.style.display=isGet?'none':'block';
+    const body=currentApiTemplates()[select.value];
+    bodyArea.value=body?JSON.stringify(body,null,2):'';
+  }
+  select.addEventListener('change',refresh); refresh();
+  document.getElementById('api-send').addEventListener('click',async()=>{
+    responseEl.textContent='A enviar…';
+    try{
+      const endpoint=select.value, method=select.selectedOptions[0].dataset.method;
+      const paths={getCompanies:'/api/companies',test:'/api/test',getDrivers:'/api/drivers',getVehicles:'/api/vehicles',getFleetOrders:'/api/orders',getFleetStateLogs:'/api/state-logs'};
+      let body=null;
+      if(method==='POST'){
+        try{ body=JSON.parse(bodyArea.value||'{}'); }
+        catch{ throw new Error('O corpo JSON não é válido.'); }
+      }
+      const data=await boltFetch(paths[endpoint],method,body);
+      responseEl.textContent=JSON.stringify(data,null,2);
+    }catch(e){ responseEl.textContent='Erro: '+e.message; }
+  });
+}
+
+/* ============================================================
+   MODAL / UTILITÁRIOS UI
+============================================================ */
+function openModal(html){
+  document.getElementById('modal-root').innerHTML = `<div class="overlay" id="overlay"><div class="modal">${html}</div></div>`;
+  document.getElementById('overlay').addEventListener('click', e=>{ if(e.target.id==='overlay') closeModal(); });
+}
+function closeModal(){ document.getElementById('modal-root').innerHTML=''; }
+function deleteItem(type, id){
+  if(!confirm('Apagar este registo?')) return;
+  state[type] = state[type].filter(x=>x.id!==id);
+  save(type); render();
+}
+function emptyState(msg, icon){
+  return `<div class="empty-state">${(ICONS[icon]||ICONS.list)}<p>${msg}</p></div>`;
+}
+function editIcon(){ return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>'; }
+function trashIcon(){ return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>'; }
+
+/* ============================================================
+   INIT
+============================================================ */
+(async function init(){
+  await loadAll();
+  render();
+})();
+</script>
+</body>
+</html>

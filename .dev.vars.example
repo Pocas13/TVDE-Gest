@@ -1,0 +1,3 @@
+# Copia para .dev.vars apenas no teu computador. Nunca publiques este ficheiro.
+BOLT_CLIENT_ID=coloca_aqui_o_client_id
+BOLT_CLIENT_SECRET=coloca_aqui_o_client_secret
