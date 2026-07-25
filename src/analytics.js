@@ -4,17 +4,27 @@ function addDays(isoDate, days) {
   return date.toISOString().slice(0, 10);
 }
 
-function periodStart(referenceDate, period) {
-  const ref = referenceDate || new Date().toISOString().slice(0, 10);
-  if (period === 'week') return addDays(ref, -6);
-  if (period === 'quarter') return addDays(ref, -89);
-  if (period === 'year') return `${ref.slice(0, 4)}-01-01`;
-  return addDays(ref, -29);
+function mondayOf(isoDate) {
+  const date = new Date(`${isoDate}T12:00:00Z`);
+  const diff = (date.getUTCDay() + 6) % 7;
+  date.setUTCDate(date.getUTCDate() - diff);
+  return date.toISOString().slice(0,10);
+}
+function periodBounds(referenceDate, period) {
+  const ref = referenceDate || new Date().toISOString().slice(0,10);
+  const thisMonday = mondayOf(ref);
+  if (period === 'this_week') return {start:thisMonday,end:addDays(thisMonday,6)};
+  if (period === 'last_week') { const s=addDays(thisMonday,-7); return {start:s,end:addDays(s,6)}; }
+  if (period === 'four_weeks') { const s=addDays(thisMonday,-21); return {start:s,end:addDays(thisMonday,6)}; }
+  if (period === 'quarter') {
+    const [y,m]=ref.split('-').map(Number), qm=Math.floor((m-1)/3)*3+1, endDay=new Date(Date.UTC(y,qm+3,0)).getUTCDate();
+    return {start:`${y}-${String(qm).padStart(2,'0')}-01`,end:`${y}-${String(qm+2).padStart(2,'0')}-${String(endDay).padStart(2,'0')}`};
+  }
+  return {start:`${ref.slice(0,4)}-01-01`,end:`${ref.slice(0,4)}-12-31`};
 }
 
 export async function fleetMirror(db, { period = 'month', referenceDate } = {}) {
-  const endDate = referenceDate || new Date().toISOString().slice(0, 10);
-  const startDate = periodStart(endDate, period);
+  const {start:startDate,end:endDate}=periodBounds(referenceDate,period);
   const drivers = (await db.prepare(`
     SELECT d.id, d.name, d.status, d.phone, d.email, d.current_vehicle_id,
       GROUP_CONCAT(DISTINCT a.platform) AS platforms,
@@ -23,7 +33,9 @@ export async function fleetMirror(db, { period = 'month', referenceDate } = {}) 
       MAX(CASE WHEN a.platform='Bolt' THEN a.rating END) AS bolt_rating,
       MAX(CASE WHEN a.platform='Uber' THEN a.rating END) AS uber_rating
     FROM drivers d
-    LEFT JOIN driver_platform_accounts a ON a.driver_id=d.id
+    JOIN driver_platform_accounts a ON a.driver_id=d.id
+    WHERE LOWER(COALESCE(d.status,'active')) NOT IN ('inactive','disabled','deactivated','blocked')
+      AND LOWER(COALESCE(a.platform_status,'active')) NOT IN ('inactive','disabled','deactivated','blocked','rejected')
     GROUP BY d.id
     ORDER BY d.name
   `).all()).results || [];

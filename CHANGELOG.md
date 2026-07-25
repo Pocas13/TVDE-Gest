@@ -1,11 +1,12 @@
 # Changelog — TVDE Gest
 
-## 1.1.0
-- Novo cockpit unificado da frota.
-- Espelho geral por motorista com origem Bolt/Uber preservada.
-- Visão individual anual com histórico semanal.
-- Indicadores de viagens, IVA, gorjetas, portagens, base dos acertos, ganho da empresa, pagamentos e saldo.
-- Novo endpoint de análise consolidada.
-- Interface reorganizada e responsiva.
-- Publicação protegida: o script bloqueia deploy sem binding D1.
-- Estrutura da raiz simplificada.
+## 1.2.0
+- Explorer limpo automaticamente durante a atualização.
+- Dashboard passa a usar toda a largura disponível.
+- Períodos alinhados com semanas de segunda-feira a domingo.
+- Regras permanentes por motorista, ativas por defeito.
+- IVA fixo e bloqueado em 6% incluído (divisão por 1,06).
+- Comissão limitada a 0% ou 4%; taxa semanal permanece editável.
+- Motoristas desativados nas plataformas são ignorados.
+- Análise individual calcula diretamente a partir dos registos financeiros, mesmo sem cálculo semanal prévio.
+- Cálculo de ganhos disponível com Bolt enquanto a Uber aguarda scopes.

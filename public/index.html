@@ -94,7 +94,7 @@ nav{display:flex; flex-direction:column; gap:2px; margin-top:8px;}
 .topbar h1{font-family:var(--font-display); font-weight:600; font-size:26px; letter-spacing:.2px;}
 .topbar-meta{font-size:12px; color:var(--text-faint); font-family:var(--font-mono);}
 
-.content{padding:28px 32px 60px 32px; max-width:1180px;}
+.content{padding:28px 32px 60px 32px; width:100%; max-width:none;}
 
 /* ---------- generic components ---------- */
 .card{
@@ -102,7 +102,7 @@ nav{display:flex; flex-direction:column; gap:2px; margin-top:8px;}
   padding:20px;
 }
 .grid{display:grid; gap:16px;}
-.kpi-grid{grid-template-columns:repeat(4,1fr); margin-bottom:20px;}
+.kpi-grid{grid-template-columns:repeat(4,minmax(180px,1fr)); margin-bottom:20px;}
 @media (max-width:900px){.kpi-grid{grid-template-columns:repeat(2,1fr);}}
 
 .kpi{
@@ -454,7 +454,7 @@ const NAV_ITEMS = [
   {id:'veiculos', label:'Veículos', icon:'car'},
   {id:'motoristas', label:'Motoristas', icon:'user'},
   {id:'registos', label:'Registos', icon:'list'},
-  {id:'acertos', label:'Acertos semanais', icon:'calc'},
+  {id:'acertos', label:'Cálculo de ganhos', icon:'calc'},
   {id:'conformidade', label:'Privacidade e dados', icon:'shield'},
   {id:'importar', label:'Importar CSV', icon:'upload'},
   {id:'integracoes', label:'Integrações', icon:'plug'},
@@ -480,7 +480,7 @@ function renderNav(){
   nav.querySelectorAll('.nav-item').forEach(b=>b.addEventListener('click', ()=>{ currentView=b.dataset.view; render(); }));
 }
 
-const TITLES = {painel:'Visão geral', espelho:'Espelho da frota', veiculos:'Veículos', motoristas:'Motoristas', registos:'Registos', acertos:'Acertos semanais', conformidade:'Privacidade e dados', importar:'Importar CSV', integracoes:'Integrações'};
+const TITLES = {painel:'Visão geral', espelho:'Espelho da frota', veiculos:'Veículos', motoristas:'Motoristas', registos:'Registos', acertos:'Cálculo de ganhos', conformidade:'Privacidade e dados', importar:'Importar CSV', integracoes:'Integrações'};
 
 function render(){
   renderNav();
@@ -526,11 +526,11 @@ function lastNDays(n){
    VISTA: PAINEL
 ============================================================ */
 async function renderPainel(c){
-  const period=state.settings.mirrorPeriod||'month';
+  const period=state.settings.mirrorPeriod||'this_week';
   c.innerHTML=`
     <div class="hero-grid">
-      <div class="hero-card"><div class="hero-eyebrow">Cockpit operacional</div><h2>Um espelho real da tua frota.</h2><p>Uber e Bolt são normalizadas no mesmo modelo de dados, mantendo sempre a origem identificada. Vê produção, IVA, gorjetas, portagens, acertos e saldos por motorista.</p></div>
-      <div class="card"><div class="kpi-label">Período em análise</div><div class="period-bar" style="margin-top:10px">${[['week','7 dias'],['month','30 dias'],['quarter','Trimestre'],['year','Ano']].map(([v,l])=>`<button class="period-btn ${period===v?'active':''}" data-period="${v}">${l}</button>`).join('')}</div><div style="font-size:12px;color:var(--text-faint);margin-top:14px">A informação financeira é somada entre plataformas apenas para gestão interna, preservando o detalhe Bolt/Uber.</div></div>
+      <div class="hero-card"><div class="hero-eyebrow">Cockpit operacional</div><h2 style="color:#fff">Um espelho real da tua frota.</h2><p style="color:#d9e8ed">Uber e Bolt são normalizadas no mesmo modelo de dados, mantendo sempre a origem identificada. Vê produção, IVA, gorjetas, portagens, acertos e saldos por motorista.</p></div>
+      <div class="card"><div class="kpi-label">Período em análise</div><div class="period-bar" style="margin-top:10px">${[['this_week','Esta semana'],['last_week','Semana anterior'],['four_weeks','Últimas 4 semanas'],['quarter','Trimestre'],['year','Ano']].map(([v,l])=>`<button class="period-btn ${period===v?'active':''}" data-period="${v}">${l}</button>`).join('')}</div><div style="font-size:12px;color:var(--text-faint);margin-top:14px">A informação financeira é somada entre plataformas apenas para gestão interna, preservando o detalhe Bolt/Uber.</div></div>
     </div>
     <div class="formula-strip"><b>Fórmula dos acertos:</b> (viagens Uber + Bolt) ÷ 1,06 + gorjetas + portagens − aluguer / slot / 4% − pagamentos já efetuados = saldo.</div>
     <div id="mirror-overview" style="margin-top:18px"><div class="table-empty">A construir o espelho da frota…</div></div>`;
@@ -549,7 +549,7 @@ function renderFleetOverview(m){
     <div class="kpi-grid">
       <div class="kpi"><div class="kpi-label">Viagens brutas</div><div class="kpi-value">${money(Number(s.fareGrossCents||0)/100)}</div><div class="kpi-sub">${Number(s.trips||0)} viagens</div></div>
       <div class="kpi"><div class="kpi-label">IVA incluído</div><div class="kpi-value">${money(Number(s.vatCents||0)/100)}</div><div class="kpi-sub">Calculado por divisão por 1,06</div></div>
-      <div class="kpi"><div class="kpi-label">Base dos acertos</div><div class="kpi-value">${money(Number(s.settlementBaseCents||0)/100)}</div><div class="kpi-sub">Sem IVA + gorjetas + portagens</div></div>
+      <div class="kpi"><div class="kpi-label">Base de cálculo</div><div class="kpi-value">${money(Number(s.settlementBaseCents||0)/100)}</div><div class="kpi-sub">Sem IVA + gorjetas + portagens</div></div>
       <div class="kpi"><div class="kpi-label">Saldo em aberto</div><div class="kpi-value">${money(Number(s.balanceCents||0)/100)}</div><div class="kpi-sub">Após pagamentos registados</div></div>
     </div>
     <div class="grid" style="grid-template-columns:1fr 1fr;margin-bottom:18px">
@@ -568,15 +568,15 @@ function driverCard(d){
 }
 
 async function renderEspelho(c){
-  const period=state.settings.mirrorPeriod||'month';
-  c.innerHTML=`<div class="toolbar"><div><div class="section-title" style="margin:0">Espelho consolidado</div><div style="font-size:12px;color:var(--text-faint)">Uma linha por motorista, com rastreabilidade da origem.</div></div><div class="period-bar">${[['week','7 dias'],['month','30 dias'],['quarter','Trimestre'],['year','Ano']].map(([v,l])=>`<button class="period-btn ${period===v?'active':''}" data-period="${v}">${l}</button>`).join('')}</div></div><div id="full-mirror"><div class="table-empty">A carregar…</div></div>`;
+  const period=state.settings.mirrorPeriod||'this_week';
+  c.innerHTML=`<div class="toolbar"><div><div class="section-title" style="margin:0">Espelho consolidado</div><div style="font-size:12px;color:var(--text-faint)">Uma linha por motorista, com rastreabilidade da origem.</div></div><div class="period-bar">${[['this_week','Esta semana'],['last_week','Semana anterior'],['four_weeks','Últimas 4 semanas'],['quarter','Trimestre'],['year','Ano']].map(([v,l])=>`<button class="period-btn ${period===v?'active':''}" data-period="${v}">${l}</button>`).join('')}</div></div><div id="full-mirror"><div class="table-empty">A carregar…</div></div>`;
   c.querySelectorAll('[data-period]').forEach(b=>b.addEventListener('click',async()=>{state.settings.mirrorPeriod=b.dataset.period;await save('settings');render();}));
   try{const data=await apiFetch(`/api/analytics/fleet?period=${encodeURIComponent(period)}`);const m=data.mirror;document.getElementById('full-mirror').innerHTML=`<div class="table-wrap"><table class="mirror-table"><thead><tr><th>Motorista</th><th>Bolt</th><th>Uber</th><th>Viagens</th><th>IVA</th><th>Gorjetas</th><th>Portagens</th><th>Base</th><th>Ganho empresa</th><th>Saldo</th></tr></thead><tbody>${m.drivers.map(d=>`<tr data-driver-mirror="${esc(d.id)}" style="cursor:pointer"><td>${esc(d.name)}<br><small style="color:var(--text-faint)">${esc(d.platforms||'—')}</small></td><td class="num">${money(Number(d.bolt?.fare_gross_cents||0)/100)}</td><td class="num">${money(Number(d.uber?.fare_gross_cents||0)/100)}</td><td class="num">${Number(d.total?.trips||0)}</td><td class="num">${money(Number(d.total?.vatCents||0)/100)}</td><td class="num">${money(Number(d.total?.tipsCents||0)/100)}</td><td class="num">${money(Number(d.total?.tollsCents||0)/100)}</td><td class="num"><b>${money(Number(d.total?.settlementBaseCents||0)/100)}</b></td><td class="num">${money(Number(d.settlement?.operator_gain_cents||0)/100)}</td><td class="num">${money(Number(d.settlement?.balance_cents||0)/100)}</td></tr>`).join('')}</tbody></table></div>`;document.querySelectorAll('[data-driver-mirror]').forEach(x=>x.addEventListener('click',()=>openDriverMirror(x.dataset.driverMirror)));}catch(e){document.getElementById('full-mirror').innerHTML=`<div class="info-card">${esc(e.message)}</div>`;}
 }
 
 async function openDriverMirror(driverId){
   const c=document.getElementById('content');document.getElementById('page-title').textContent='Espelho do motorista';c.innerHTML='<div class="table-empty">A carregar motorista…</div>';
-  try{const data=await apiFetch(`/api/analytics/driver?driver_id=${encodeURIComponent(driverId)}&period=year`);const m=data.mirror,d=m.driver,t=d.total||{};c.innerHTML=`<div class="detail-banner"><div><button class="back-link" id="back-mirror">← Voltar ao espelho</button><h2 style="font-family:var(--font-display);font-size:30px;margin-top:8px">${esc(d.name)}</h2><div style="color:var(--text-faint)">${esc(d.phone||'')} ${d.email?'· '+esc(d.email):''}</div></div><div><span class="source-badge">${esc(d.platforms||'Sem plataforma')}</span></div></div><div class="kpi-grid"><div class="kpi"><div class="kpi-label">Viagens brutas</div><div class="kpi-value">${money(Number(t.fareGrossCents||0)/100)}</div></div><div class="kpi"><div class="kpi-label">IVA</div><div class="kpi-value">${money(Number(t.vatCents||0)/100)}</div></div><div class="kpi"><div class="kpi-label">Base dos acertos</div><div class="kpi-value">${money(Number(t.settlementBaseCents||0)/100)}</div></div><div class="kpi"><div class="kpi-label">Saldo</div><div class="kpi-value">${money(Number(d.settlement?.balance_cents||0)/100)}</div></div></div><div class="grid" style="grid-template-columns:1fr 1fr"><div class="card"><div class="section-title" style="margin-top:0">Origem dos rendimentos</div><div class="platform-split"><div class="platform-box"><span class="pill bolt">Bolt</span><strong>${money(Number(d.bolt?.fare_gross_cents||0)/100)}</strong><small>${Number(d.bolt?.trips||0)} viagens</small></div><div class="platform-box"><span class="pill uber">Uber</span><strong>${money(Number(d.uber?.fare_gross_cents||0)/100)}</strong><small>${Number(d.uber?.trips||0)} viagens</small></div></div></div><div class="card"><div class="section-title" style="margin-top:0">Regra contratual</div><div style="line-height:1.8;color:var(--text-dim)"><b style="color:var(--text)">${esc(d.rule?.charge_type||'Não configurada')}</b><br>Valor: ${money(Number(d.rule?.weekly_rent_cents||0)/100)}<br>Percentagem: ${(Number(d.rule?.operator_commission_basis_points||0)/100).toLocaleString('pt-PT')}%<br>IVA: ${(Number(d.rule?.vat_rate_basis_points||600)/100).toLocaleString('pt-PT')}%</div></div></div><div class="section-title">Histórico semanal do ano</div><div class="table-wrap"><table><thead><tr><th>Semana</th><th>Viagens</th><th>IVA</th><th>Gorjetas</th><th>Portagens</th><th>Ganho empresa</th><th>Pago</th><th>Saldo</th></tr></thead><tbody>${m.weekly.map(w=>`<tr><td>${esc(w.week_start)}</td><td class="num">${money(Number(w.fare_gross_cents||0)/100)}</td><td class="num">${money(Number(w.vat_withheld_cents||0)/100)}</td><td class="num">${money(Number(w.tips_cents||0)/100)}</td><td class="num">${money(Number(w.tolls_cents||0)/100)}</td><td class="num">${money((Number(w.weekly_rent_cents||0)+Number(w.operator_commission_calculated_cents||0))/100)}</td><td class="num">${money(Number(w.payments_cents||0)/100)}</td><td class="num"><b>${money(Number(w.balance_cents||0)/100)}</b></td></tr>`).join('')||'<tr><td colspan="8">Sem acertos calculados.</td></tr>'}</tbody></table></div>`;document.getElementById('back-mirror').addEventListener('click',()=>{currentView='espelho';render();});}catch(e){c.innerHTML=`<div class="info-card">${esc(e.message)}</div>`;}
+  try{const data=await apiFetch(`/api/analytics/driver?driver_id=${encodeURIComponent(driverId)}&period=year`);const m=data.mirror,d=m.driver,t=d.total||{};c.innerHTML=`<div class="detail-banner"><div><button class="back-link" id="back-mirror">← Voltar ao espelho</button><h2 style="font-family:var(--font-display);font-size:30px;margin-top:8px">${esc(d.name)}</h2><div style="color:var(--text-faint)">${esc(d.phone||'')} ${d.email?'· '+esc(d.email):''}</div></div><div><span class="source-badge">${esc(d.platforms||'Sem plataforma')}</span></div></div><div class="kpi-grid"><div class="kpi"><div class="kpi-label">Viagens brutas</div><div class="kpi-value">${money(Number(t.fareGrossCents||0)/100)}</div></div><div class="kpi"><div class="kpi-label">IVA</div><div class="kpi-value">${money(Number(t.vatCents||0)/100)}</div></div><div class="kpi"><div class="kpi-label">Base de cálculo</div><div class="kpi-value">${money(Number(t.settlementBaseCents||0)/100)}</div></div><div class="kpi"><div class="kpi-label">Saldo</div><div class="kpi-value">${money(Number(d.settlement?.balance_cents||0)/100)}</div></div></div><div class="grid" style="grid-template-columns:1fr 1fr"><div class="card"><div class="section-title" style="margin-top:0">Origem dos rendimentos</div><div class="platform-split"><div class="platform-box"><span class="pill bolt">Bolt</span><strong>${money(Number(d.bolt?.fare_gross_cents||0)/100)}</strong><small>${Number(d.bolt?.trips||0)} viagens</small></div><div class="platform-box"><span class="pill uber">Uber</span><strong>${money(Number(d.uber?.fare_gross_cents||0)/100)}</strong><small>${Number(d.uber?.trips||0)} viagens</small></div></div></div><div class="card"><div class="section-title" style="margin-top:0">Regra contratual</div><div style="line-height:1.8;color:var(--text-dim)"><b style="color:var(--text)">${esc(d.rule?.charge_type||'Não configurada')}</b><br>Valor: ${money(Number(d.rule?.weekly_rent_cents||0)/100)}<br>Percentagem: ${(Number(d.rule?.operator_commission_basis_points||0)/100).toLocaleString('pt-PT')}%<br>IVA: ${(Number(d.rule?.vat_rate_basis_points||600)/100).toLocaleString('pt-PT')}%</div></div></div><div class="section-title">Histórico semanal do ano</div><div class="table-wrap"><table><thead><tr><th>Semana</th><th>Viagens</th><th>IVA</th><th>Gorjetas</th><th>Portagens</th><th>Ganho empresa</th><th>Pago</th><th>Saldo</th></tr></thead><tbody>${m.weekly.map(w=>`<tr><td>${esc(w.week_start)}</td><td class="num">${money(Number(w.fare_gross_cents||0)/100)}</td><td class="num">${money(Number(w.vat_withheld_cents||0)/100)}</td><td class="num">${money(Number(w.tips_cents||0)/100)}</td><td class="num">${money(Number(w.tolls_cents||0)/100)}</td><td class="num">${money((Number(w.weekly_rent_cents||0)+Number(w.operator_commission_calculated_cents||0))/100)}</td><td class="num">${money(Number(w.payments_cents||0)/100)}</td><td class="num"><b>${money(Number(w.balance_cents||0)/100)}</b></td></tr>`).join('')||'<tr><td colspan="8">Sem acertos calculados.</td></tr>'}</tbody></table></div>`;document.getElementById('back-mirror').addEventListener('click',()=>{currentView='espelho';render();});}catch(e){c.innerHTML=`<div class="info-card">${esc(e.message)}</div>`;}
 }
 
 /* ============================================================
@@ -814,30 +814,30 @@ function renderAcertos(c){
     </div>
     <div class="card" style="margin-bottom:18px;">
       <div class="toolbar" style="margin:0;">
-        <div class="field" style="margin:0; min-width:220px;"><label>Segunda-feira da semana</label><input id="settlement-week" type="date" value="${esc(week)}"></div>
+        <div><div class="field" style="margin:0; min-width:220px;"><label>Semana (segunda-feira a domingo)</label><input id="settlement-week" type="date" value="${esc(week)}"></div><div style="display:flex;gap:6px;margin-top:7px"><button class="btn small quick-week" data-offset="0">Esta semana</button><button class="btn small quick-week" data-offset="-7">Semana anterior</button></div></div>
         <div style="display:flex; gap:8px; align-items:end; flex-wrap:wrap;">
           <button class="btn" id="load-settlements">Atualizar</button>
-          <button class="btn" id="activate-all-rules">Ativar todas as regras</button>
+          
           <button class="btn primary" id="calculate-settlements">Calcular/recalcular</button>
         </div>
       </div>
       <pre id="settlement-log" style="margin-top:12px; background:var(--bg); border:1px solid var(--line); border-radius:7px; padding:10px; font-size:12px; color:var(--text-dim);">Pronto.</pre>
     </div>
     <div class="section-title">Resultado da semana</div><div id="settlements-table">A carregar…</div>
-    <div class="section-title">Análise individual</div>
+    <div class="section-title">Análise individual do motorista</div>
     <div class="card" style="margin-bottom:18px;">
       <div class="toolbar" style="margin:0;">
         <div class="field" style="margin:0; min-width:220px;"><label>Motorista</label><select id="analysis-driver"></select></div>
-        <div class="field" style="margin:0; min-width:160px;"><label>Período</label><select id="analysis-period"><option value="weekly">Semana</option><option value="quarterly">Trimestre</option><option value="annual">Ano</option></select></div>
+        <div class="field" style="margin:0; min-width:160px;"><label>Período</label><select id="analysis-period"><option value="weekly">Semana selecionada</option><option value="quarterly">Trimestre</option><option value="annual">Ano</option></select></div>
         <div class="field" style="margin:0; min-width:180px;"><label>Data de referência</label><input id="analysis-reference" type="date" value="${esc(week)}"></div>
         <button class="btn" id="load-analysis">Analisar</button>
       </div>
       <div id="settlement-analysis" style="margin-top:14px;">Seleciona um motorista.</div>
     </div>
-    <div class="section-title">Regras por motorista</div><div id="settlement-rules">A carregar…</div>`;
+    <div class="section-title">Regras permanentes por motorista</div><div id="settlement-rules">A carregar…</div>`;
   document.getElementById('load-settlements').addEventListener('click',()=>loadSettlementsView());
+  document.querySelectorAll('.quick-week').forEach(b=>b.addEventListener('click',()=>{const d=new Date();const diff=(d.getDay()+6)%7;d.setDate(d.getDate()-diff+Number(b.dataset.offset||0));document.getElementById('settlement-week').value=d.toISOString().slice(0,10);loadSettlementsView();}));
   document.getElementById('calculate-settlements').addEventListener('click',()=>calculateSettlementsView());
-  document.getElementById('activate-all-rules').addEventListener('click',()=>activateAllRulesView());
   document.getElementById('load-analysis').addEventListener('click',()=>loadSettlementAnalysis());
   loadSettlementsView();
 }
@@ -850,22 +850,13 @@ async function loadSettlementsView(){
     const [settlementsData,rulesData]=await Promise.all([apiFetch(`/api/settlements?week_start=${encodeURIComponent(week)}`),apiFetch('/api/settlement-rules')]);
     state.settlements=settlementsData.settlements||[]; state.settlementRules=rulesData.rules||[];
     renderSettlementsTable(); renderSettlementRules(); renderAnalysisDriverOptions();
-    const active=state.settlementRules.filter(rule=>Number(rule.active)===1).length;
-    if(log) log.textContent=active===0
-      ? `0 regras ativas em ${state.settlementRules.length}. Ativa as regras antes de calcular.`
-      : `${state.settlements.length} acerto(s), ${active} regra(s) ativa(s) e ${state.settlementRules.length-active} inativa(s).`;
+    if(log) log.textContent=`${state.settlements.length} cálculo(s) carregado(s) e ${state.settlementRules.length} regra(s) permanente(s).`;
   }catch(error){ if(log) log.textContent='Erro: '+error.message; document.getElementById('settlements-table').innerHTML=`<div class="empty-state"><p>${esc(error.message)}</p></div>`; }
 }
-async function activateAllRulesView(){
-  const log=document.getElementById('settlement-log'); if(log) log.textContent='A ativar regras…';
-  try{ const data=await apiFetch('/api/settlement-rules/activate-all',{method:'POST',body:'{}'}); await loadSettlementsView(); toast(`${data.result?.activated||0} regra(s) ativadas.`); }
-  catch(error){ if(log) log.textContent='Erro: '+error.message; }
-}
+
 async function calculateSettlementsView(){
   const week=document.getElementById('settlement-week')?.value||browserPreviousMonday();
   const log=document.getElementById('settlement-log'); if(log) log.textContent='A calcular acertos…';
-  const active=state.settlementRules.filter(rule=>Number(rule.active)===1).length;
-  if(active===0){ if(log) log.textContent='Não existem regras ativas. Clica em “Ativar todas as regras” ou ativa cada motorista individualmente.'; return; }
   try{ const data=await apiFetch('/api/settlements/calculate',{method:'POST',body:JSON.stringify({weekStart:week})}); await loadSettlementsView(); const modo=data.platformMode==='BOLT_ONLY'?' apenas com dados Bolt':''; toast(`${data.settlements?.length||0} acerto(s) calculados${modo}.`); }
   catch(error){ if(log) log.textContent='Erro: '+error.message; }
 }
@@ -915,36 +906,33 @@ function renderSettlementAnalysis(a){
 }
 function renderSettlementRules(){
   const wrap=document.getElementById('settlement-rules'); if(!wrap) return;
-  if(!state.settlementRules.length){ wrap.innerHTML=emptyState('Sincroniza ou cria primeiro os motoristas.','user'); return; }
-  wrap.innerHTML=`<div class="table-wrap"><table>
-    <thead><tr><th>Ativa</th><th>Motorista</th><th>Tipo</th><th>Taxa semanal</th><th>IVA</th><th>Comissão</th><th>Plataformas</th><th>Exceção nesta semana</th><th></th></tr></thead>
-    <tbody>${state.settlementRules.map(rule=>`<tr data-rule-driver="${esc(rule.driver_id)}" style="${Number(rule.active)===1?'':'opacity:.65'}">
-      <td><input class="rule-active" type="checkbox" ${Number(rule.active)===1?'checked':''}></td><td>${esc(rule.driver_name)}${Number(rule.active)===1?'':' <small>(inativa)</small>'}</td>
+  if(!state.settlementRules.length){ wrap.innerHTML=emptyState('Não existem motoristas ativos nas plataformas.','user'); return; }
+  wrap.innerHTML=`<div class="info-card"><b>Regras permanentes:</b> ficam guardadas na base de dados e só precisam de ser alteradas quando muda o acordo com o motorista. O IVA é sempre calculado por divisão por 1,06.</div><div class="table-wrap"><table>
+    <thead><tr><th>Motorista</th><th>Tipo</th><th>Taxa semanal</th><th>IVA</th><th>Comissão</th><th>Plataformas</th><th>Exceção desta semana</th><th></th></tr></thead>
+    <tbody>${state.settlementRules.map(rule=>`<tr data-rule-driver="${esc(rule.driver_id)}">
+      <td><b>${esc(rule.driver_name)}</b></td>
       <td><select class="rule-charge"><option value="SLOT" ${rule.charge_type==='SLOT'?'selected':''}>Slot</option><option value="VEHICLE_RENTAL" ${rule.charge_type==='VEHICLE_RENTAL'?'selected':''}>Aluguer</option><option value="PERCENTAGE" ${rule.charge_type==='PERCENTAGE'?'selected':''}>Percentagem</option></select></td>
-      <td><input class="rule-rent" type="number" min="0" step="0.01" value="${Number(rule.weekly_rent_cents||0)/100}" style="width:90px"></td>
-      <td><input class="rule-vat" type="number" min="0" max="100" step="0.01" value="${Number(rule.vat_rate_basis_points||600)/100}" style="width:70px">%</td>
-      <td><input class="rule-commission" type="number" min="0" max="100" step="0.01" value="${Number(rule.operator_commission_basis_points||0)/100}" style="width:70px">%</td>
-      <td><label><input class="rule-bolt" type="checkbox" ${Number(rule.include_bolt)!==0?'checked':''}> Bolt</label> <label><input class="rule-uber" type="checkbox" ${Number(rule.include_uber)!==0?'checked':''}> Uber</label></td>
-      <td><input class="week-override" type="number" min="0" step="0.01" placeholder="usar padrão" style="width:105px"></td>
-      <td><button class="btn small save-rule">Guardar</button></td></tr>`).join('')}</tbody></table></div>`;
+      <td><input class="rule-rent" type="number" min="0" step="0.01" value="${Number(rule.weekly_rent_cents||0)/100}" style="width:100px"></td>
+      <td><input value="6% (incluído)" disabled style="width:100px;opacity:.75"></td>
+      <td><select class="rule-commission"><option value="0" ${Number(rule.operator_commission_basis_points||0)===0?'selected':''}>0%</option><option value="400" ${Number(rule.operator_commission_basis_points||0)===400?'selected':''}>4%</option></select></td>
+      <td><span class="source-badge">${esc(rule.platforms||'Plataforma ativa')}</span></td>
+      <td><input class="week-override" type="number" min="0" step="0.01" placeholder="usar regra fixa" style="width:120px"></td>
+      <td><button class="btn small save-rule">Guardar alteração</button></td></tr>`).join('')}</tbody></table></div>`;
   wrap.querySelectorAll('.save-rule').forEach(button=>button.addEventListener('click',async()=>{
     const row=button.closest('tr'), week=document.getElementById('settlement-week').value; button.disabled=true;
     try{
-      await apiFetch('/api/settlement-rules',{method:'POST',body:JSON.stringify({driverId:row.dataset.ruleDriver,active:row.querySelector('.rule-active').checked,
-        weeklyRentCents:Math.round(Number(row.querySelector('.rule-rent').value||0)*100),vatRateBasisPoints:Math.round(Number(row.querySelector('.rule-vat').value||0)*100),
-        operatorCommissionBasisPoints:Math.round(Number(row.querySelector('.rule-commission').value||0)*100),chargeType:row.querySelector('.rule-charge').value,
-        includeBolt:row.querySelector('.rule-bolt').checked,includeUber:row.querySelector('.rule-uber').checked})});
+      await apiFetch('/api/settlement-rules',{method:'POST',body:JSON.stringify({driverId:row.dataset.ruleDriver,active:true,
+        weeklyRentCents:Math.round(Number(row.querySelector('.rule-rent').value||0)*100),vatRateBasisPoints:600,
+        operatorCommissionBasisPoints:Number(row.querySelector('.rule-commission').value||0),chargeType:row.querySelector('.rule-charge').value,
+        includeBolt:true,includeUber:true})});
       const ov=row.querySelector('.week-override').value;
       if(ov!=='') await apiFetch('/api/settlement-week-override',{method:'POST',body:JSON.stringify({driverId:row.dataset.ruleDriver,weekStart:week,weeklyChargeCents:Math.round(Number(ov)*100)})});
-      const refreshed=await apiFetch('/api/settlement-rules');
-      state.settlementRules=refreshed.rules||[];
-      const saved=state.settlementRules.find(r=>r.driver_id===row.dataset.ruleDriver);
-      if(!saved) throw new Error('A regra não foi encontrada após guardar.');
-      renderSettlementRules(); renderAnalysisDriverOptions();
-      toast(`Regra de ${saved.driver_name} guardada.`);
+      const refreshed=await apiFetch('/api/settlement-rules'); state.settlementRules=refreshed.rules||[];
+      renderSettlementRules(); renderAnalysisDriverOptions(); toast('Regra permanente guardada.');
     }catch(error){toast('Erro: '+error.message);} finally{button.disabled=false;}
   }));
 }
+
 
 
 /* ============================================================

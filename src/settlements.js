@@ -22,7 +22,7 @@ async function ensureDefaultRule(db, driverId) {
     INSERT INTO settlement_rules (
       driver_id, active, mode, weekly_rent_cents, driver_share_basis_points,
       operator_fee_cents, vat_rate_basis_points, operator_commission_basis_points, charge_type
-    ) VALUES (?, 0, 'FLEET_PAYOUT', 25000, 10000, 0, 600, 0, 'VEHICLE_RENTAL')
+    ) VALUES (?, 1, 'FLEET_PAYOUT', 25000, 10000, 0, 600, 0, 'VEHICLE_RENTAL')
     ON CONFLICT(driver_id) DO NOTHING
   `).bind(driverId).run();
   return db.prepare('SELECT * FROM settlement_rules WHERE driver_id = ?').bind(driverId).first();
@@ -88,7 +88,14 @@ export async function addSettlementAdjustment(db, input) {
 export async function calculateSettlements(db, weekStart, options = {}) {
   const boltOnly = options.platformMode === 'BOLT_ONLY';
   const weekEnd = addDays(weekStart, 6);
-  const drivers = (await db.prepare('SELECT id,name FROM drivers ORDER BY name').all()).results || [];
+  const drivers = (await db.prepare(`
+    SELECT DISTINCT d.id,d.name
+    FROM drivers d
+    JOIN driver_platform_accounts a ON a.driver_id=d.id
+    WHERE LOWER(COALESCE(d.status,'active')) NOT IN ('inactive','disabled','deactivated','blocked')
+      AND LOWER(COALESCE(a.platform_status,'active')) NOT IN ('inactive','disabled','deactivated','blocked','rejected')
+    ORDER BY d.name
+  `).all()).results || [];
   const results = [];
   for (const driver of drivers) {
     const rule = await ensureDefaultRule(db, driver.id);
@@ -160,12 +167,25 @@ export async function listSettlements(db, weekStart) {
     WHERE s.week_start=? ORDER BY d.name`).bind(weekStart).all(); return r.results||[];
 }
 export async function listSettlementRules(db) {
-  const drivers = (await db.prepare('SELECT id FROM drivers').all()).results || [];
+  const drivers = (await db.prepare(`
+    SELECT DISTINCT d.id
+    FROM drivers d
+    JOIN driver_platform_accounts a ON a.driver_id=d.id
+    WHERE LOWER(COALESCE(d.status,'active')) NOT IN ('inactive','disabled','deactivated','blocked')
+      AND LOWER(COALESCE(a.platform_status,'active')) NOT IN ('inactive','disabled','deactivated','blocked','rejected')
+  `).all()).results || [];
   for (const driver of drivers) await ensureDefaultRule(db, driver.id);
   const r=await db.prepare(`SELECT d.id driver_id,d.name driver_name,d.phone,
-    r.active,r.mode,r.weekly_rent_cents,r.include_bolt,r.include_uber,r.vat_rate_basis_points,
-    r.operator_commission_basis_points,r.charge_type,r.notes,r.updated_at
-    FROM drivers d JOIN settlement_rules r ON r.driver_id=d.id ORDER BY d.name`).all();
+    1 AS active,r.mode,r.weekly_rent_cents,r.include_bolt,r.include_uber,600 AS vat_rate_basis_points,
+    r.operator_commission_basis_points,r.charge_type,r.notes,r.updated_at,
+    GROUP_CONCAT(DISTINCT a.platform) AS platforms
+    FROM drivers d
+    JOIN settlement_rules r ON r.driver_id=d.id
+    JOIN driver_platform_accounts a ON a.driver_id=d.id
+    WHERE LOWER(COALESCE(d.status,'active')) NOT IN ('inactive','disabled','deactivated','blocked')
+      AND LOWER(COALESCE(a.platform_status,'active')) NOT IN ('inactive','disabled','deactivated','blocked','rejected')
+    GROUP BY d.id
+    ORDER BY d.name`).all();
   return r.results||[];
 }
 
@@ -195,34 +215,49 @@ export async function settlementAnalysis(db, { driverId, period = 'weekly', refe
   const bounds = periodBounds(normalizedPeriod, referenceDate);
   const driver = await db.prepare('SELECT id,name,phone FROM drivers WHERE id=?').bind(driverId).first();
   if (!driver) throw new Error('Motorista não encontrado.');
-  const rowsResult = await db.prepare(`SELECT * FROM weekly_settlements
-    WHERE driver_id=? AND week_start BETWEEN ? AND ? ORDER BY week_start`)
-    .bind(driverId, bounds.start, bounds.end).all();
-  const rows = rowsResult.results || [];
-  const sum = (key) => rows.reduce((total, row) => total + Number(row[key] || 0), 0);
-  const summary = {
-    fareGrossCents: sum('fare_gross_cents'),
-    vatWithheldCents: sum('vat_withheld_cents'),
-    fareNetOfVatCents: sum('fare_gross_cents') - sum('vat_withheld_cents'),
-    tipsCents: sum('tips_cents'),
-    tollsCents: sum('tolls_cents'),
-    settlementBaseCents: sum('fare_gross_cents') - sum('vat_withheld_cents') + sum('tips_cents') + sum('tolls_cents'),
-    rentalOrSlotCents: sum('weekly_rent_cents'),
-    percentageCents: sum('operator_commission_calculated_cents'),
-    operatorGainCents: sum('weekly_rent_cents') + sum('operator_commission_calculated_cents'),
-    driverEntitlementCents: sum('platform_net_cents') - sum('weekly_rent_cents') + sum('credits_cents') - sum('debits_cents'),
-    paymentsCents: sum('payments_cents'),
-    balanceCents: sum('balance_cents'),
-    weeks: rows.length,
-  };
-  return { driver, period: normalizedPeriod, ...bounds, summary, rows };
+  const rule = await ensureDefaultRule(db, driverId);
+  const raw = (await db.prepare(`
+    SELECT date(service_date, '-' || ((CAST(strftime('%w', service_date) AS INTEGER)+6)%7) || ' days') AS week_start,
+      COALESCE(SUM(MAX(0,gross_cents-tip_cents-toll_cents)),0) fare_gross_cents,
+      COALESCE(SUM(tip_cents),0) tips_cents,
+      COALESCE(SUM(toll_cents),0) tolls_cents,
+      COALESCE(SUM(trip_count),0) trips,
+      COALESCE(SUM(CASE WHEN platform='Bolt' THEN MAX(0,gross_cents-tip_cents-toll_cents) ELSE 0 END),0) bolt_fare_cents,
+      COALESCE(SUM(CASE WHEN platform='Uber' THEN MAX(0,gross_cents-tip_cents-toll_cents) ELSE 0 END),0) uber_fare_cents
+    FROM financial_entries
+    WHERE driver_id=? AND service_date BETWEEN ? AND ?
+    GROUP BY week_start ORDER BY week_start
+  `).bind(driverId,bounds.start,bounds.end).all()).results || [];
+  const saved = (await db.prepare(`SELECT * FROM weekly_settlements WHERE driver_id=? AND week_start BETWEEN ? AND ?`).bind(driverId,bounds.start,bounds.end).all()).results || [];
+  const savedByWeek = new Map(saved.map(row=>[row.week_start,row]));
+  const rows = raw.map(row=>{
+    const fare=Number(row.fare_gross_cents||0), tips=Number(row.tips_cents||0), tolls=Number(row.tolls_cents||0);
+    const fareNet=Math.round(fare/1.06), vat=fare-fareNet, base=fareNet+tips+tolls;
+    const commission=Math.round(base*Number(rule.operator_commission_basis_points||0)/10000);
+    const charge=Number(rule.weekly_rent_cents||0);
+    const existing=savedByWeek.get(row.week_start)||{};
+    return {...row, week_end:addDays(row.week_start,6), vat_withheld_cents:vat, fare_net_cents:fareNet,
+      settlement_base_cents:base, operator_commission_calculated_cents:commission,
+      weekly_rent_cents:charge, operator_gain_cents:commission+charge,
+      driver_entitlement_cents:base-commission-charge,
+      payments_cents:Number(existing.payments_cents||0),
+      balance_cents:base-commission-charge-Number(existing.payments_cents||0)};
+  });
+  const sum = key => rows.reduce((t,r)=>t+Number(r[key]||0),0);
+  const summary={fareGrossCents:sum('fare_gross_cents'),vatWithheldCents:sum('vat_withheld_cents'),fareNetOfVatCents:sum('fare_net_cents'),
+    tipsCents:sum('tips_cents'),tollsCents:sum('tolls_cents'),settlementBaseCents:sum('settlement_base_cents'),
+    rentalOrSlotCents:sum('weekly_rent_cents'),percentageCents:sum('operator_commission_calculated_cents'),operatorGainCents:sum('operator_gain_cents'),
+    driverEntitlementCents:sum('driver_entitlement_cents'),paymentsCents:sum('payments_cents'),balanceCents:sum('balance_cents'),weeks:rows.length,trips:sum('trips')};
+  return { driver, rule, period: normalizedPeriod, ...bounds, summary, rows };
 }
 
 export async function activateAllSettlementRules(db) {
-  const drivers = (await db.prepare('SELECT id FROM drivers').all()).results || [];
+  const drivers = (await db.prepare(`SELECT DISTINCT d.id FROM drivers d JOIN driver_platform_accounts a ON a.driver_id=d.id
+    WHERE LOWER(COALESCE(d.status,'active')) NOT IN ('inactive','disabled','deactivated','blocked')
+      AND LOWER(COALESCE(a.platform_status,'active')) NOT IN ('inactive','disabled','deactivated','blocked','rejected')`).all()).results || [];
   for (const driver of drivers) {
     await ensureDefaultRule(db, driver.id);
   }
-  await db.prepare('UPDATE settlement_rules SET active=1, updated_at=CURRENT_TIMESTAMP').run();
+  await db.prepare('UPDATE settlement_rules SET active=1, vat_rate_basis_points=600, updated_at=CURRENT_TIMESTAMP').run();
   return { activated: drivers.length };
 }

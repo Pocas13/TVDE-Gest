@@ -285,7 +285,7 @@ async function handleApi(request, env) {
   }
   if (path === '/api/analytics/fleet' && request.method === 'GET') {
     return json({ ok: true, mirror: await fleetMirror(env.DB, {
-      period: url.searchParams.get('period') || 'month',
+      period: url.searchParams.get('period') || 'this_week',
       referenceDate: url.searchParams.get('reference_date') || undefined,
     }) });
   }
