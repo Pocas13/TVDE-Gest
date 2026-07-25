@@ -104,8 +104,8 @@ export async function calculateSettlements(db, weekStart, options = {}) {
     const includeUber = boltOnly ? 0 : (Number(rule.include_uber) === 1 ? 1 : 0);
     const totals = await db.prepare(`
       SELECT
-        COALESCE(SUM(CASE WHEN platform='Bolt' AND ?=1 THEN MAX(0,gross_cents-tip_cents-toll_cents) ELSE 0 END),0) bolt_fare,
-        COALESCE(SUM(CASE WHEN platform='Uber' AND ?=1 THEN MAX(0,gross_cents-tip_cents-toll_cents) ELSE 0 END),0) uber_fare,
+        COALESCE(SUM(CASE WHEN platform='Bolt' AND ?=1 THEN CASE WHEN platform='Bolt' THEN MAX(0,net_cents-tip_cents-toll_cents) ELSE MAX(0,gross_cents-tip_cents-toll_cents) END ELSE 0 END),0) bolt_fare,
+        COALESCE(SUM(CASE WHEN platform='Uber' AND ?=1 THEN CASE WHEN platform='Bolt' THEN MAX(0,net_cents-tip_cents-toll_cents) ELSE MAX(0,gross_cents-tip_cents-toll_cents) END ELSE 0 END),0) uber_fare,
         COALESCE(SUM(CASE WHEN platform='Bolt' AND ?=1 THEN tip_cents ELSE 0 END),0) bolt_tips,
         COALESCE(SUM(CASE WHEN platform='Uber' AND ?=1 THEN tip_cents ELSE 0 END),0) uber_tips,
         COALESCE(SUM(CASE WHEN platform='Bolt' AND ?=1 THEN toll_cents ELSE 0 END),0) bolt_tolls,
@@ -153,7 +153,7 @@ export async function calculateSettlements(db, weekStart, options = {}) {
       updated_at=CURRENT_TIMESTAMP`).bind(
         id,driver.id,weekStart,weekEnd,'TVDE_STANDARD',Number(totals.bolt_fare||0),Number(totals.uber_fare||0),platformPayable,
         weeklyCharge,commission,0,credits,debits,payments,balance,direction(balance),existing?.status||'draft',
-        JSON.stringify({ formula:'((viagens_uber+viagens_bolt)/(1+iva))+gorjetas+portagens-comissao-ou-taxa', vatBasisPoints:vatBp, commissionBase:'FARE_NET_OF_VAT_PLUS_TIPS_PLUS_TOLLS', trips:Number(totals.trips||0), platformMode: boltOnly ? 'BOLT_ONLY' : 'CONFIGURED' }),
+        JSON.stringify({ formula:'bolt:((ganhos_liquidos-gorjetas-portagens)/(1+iva))+gorjetas+portagens; uber:adaptador_proprio', vatBasisPoints:vatBp, commissionBase:'FARE_NET_OF_VAT_PLUS_TIPS_PLUS_TOLLS', trips:Number(totals.trips||0), platformMode: boltOnly ? 'BOLT_ONLY' : 'CONFIGURED' }),
         fareGross,tips,tolls,vatWithheld,commission
       ).run();
     results.push({driverId:driver.id,driverName:driver.name,weekStart,weekEnd,balance,direction:direction(balance)});
@@ -218,12 +218,12 @@ export async function settlementAnalysis(db, { driverId, period = 'weekly', refe
   const rule = await ensureDefaultRule(db, driverId);
   const raw = (await db.prepare(`
     SELECT date(service_date, '-' || ((CAST(strftime('%w', service_date) AS INTEGER)+6)%7) || ' days') AS week_start,
-      COALESCE(SUM(MAX(0,gross_cents-tip_cents-toll_cents)),0) fare_gross_cents,
+      COALESCE(SUM(CASE WHEN platform='Bolt' THEN MAX(0,net_cents-tip_cents-toll_cents) ELSE MAX(0,gross_cents-tip_cents-toll_cents) END),0) fare_gross_cents,
       COALESCE(SUM(tip_cents),0) tips_cents,
       COALESCE(SUM(toll_cents),0) tolls_cents,
       COALESCE(SUM(trip_count),0) trips,
-      COALESCE(SUM(CASE WHEN platform='Bolt' THEN MAX(0,gross_cents-tip_cents-toll_cents) ELSE 0 END),0) bolt_fare_cents,
-      COALESCE(SUM(CASE WHEN platform='Uber' THEN MAX(0,gross_cents-tip_cents-toll_cents) ELSE 0 END),0) uber_fare_cents
+      COALESCE(SUM(CASE WHEN platform='Bolt' THEN CASE WHEN platform='Bolt' THEN MAX(0,net_cents-tip_cents-toll_cents) ELSE MAX(0,gross_cents-tip_cents-toll_cents) END ELSE 0 END),0) bolt_fare_cents,
+      COALESCE(SUM(CASE WHEN platform='Uber' THEN CASE WHEN platform='Bolt' THEN MAX(0,net_cents-tip_cents-toll_cents) ELSE MAX(0,gross_cents-tip_cents-toll_cents) END ELSE 0 END),0) uber_fare_cents
     FROM financial_entries
     WHERE driver_id=? AND service_date BETWEEN ? AND ?
     GROUP BY week_start ORDER BY week_start

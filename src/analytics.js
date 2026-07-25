@@ -42,7 +42,12 @@ export async function fleetMirror(db, { period = 'month', referenceDate } = {}) 
 
   const financial = (await db.prepare(`
     SELECT driver_id, platform,
-      COALESCE(SUM(MAX(0,gross_cents-tip_cents-toll_cents)),0) AS fare_gross_cents,
+      COALESCE(SUM(CASE WHEN platform='Bolt' THEN MAX(0,net_cents-tip_cents-toll_cents) ELSE MAX(0,gross_cents-tip_cents-toll_cents) END),0) AS fare_gross_cents,
+      COALESCE(SUM(CASE WHEN platform='Bolt' THEN net_cents ELSE gross_cents END),0) AS platform_payable_cents,
+      COALESCE(SUM(campaign_cents),0) AS campaign_cents,
+      COALESCE(SUM(reimbursement_cents),0) AS reimbursement_cents,
+      COALESCE(SUM(cancellation_cents),0) AS cancellation_cents,
+      COALESCE(SUM(booking_fee_cents),0) AS booking_fee_cents,
       COALESCE(SUM(tip_cents),0) AS tips_cents,
       COALESCE(SUM(toll_cents),0) AS tolls_cents,
       COALESCE(SUM(trip_count),0) AS trips,
@@ -84,6 +89,11 @@ export async function fleetMirror(db, { period = 'month', referenceDate } = {}) 
     const b = driver.bolt || {}, u = driver.uber || {};
     const fare = Number(b.fare_gross_cents || 0) + Number(u.fare_gross_cents || 0);
     const tips = Number(b.tips_cents || 0) + Number(u.tips_cents || 0);
+    const platformPayable = Number(b.platform_payable_cents || 0) + Number(u.platform_payable_cents || 0);
+    const campaign = Number(b.campaign_cents || 0) + Number(u.campaign_cents || 0);
+    const reimbursements = Number(b.reimbursement_cents || 0) + Number(u.reimbursement_cents || 0);
+    const cancellations = Number(b.cancellation_cents || 0) + Number(u.cancellation_cents || 0);
+    const bookingFees = Number(b.booking_fee_cents || 0) + Number(u.booking_fee_cents || 0);
     const tolls = Number(b.tolls_cents || 0) + Number(u.tolls_cents || 0);
     const vatRate = Number(driver.rule?.vat_rate_basis_points ?? 600);
     const fareNet = Math.round(fare * 10000 / (10000 + vatRate));
@@ -92,6 +102,8 @@ export async function fleetMirror(db, { period = 'month', referenceDate } = {}) 
       ...driver,
       total: {
         fareGrossCents: fare,
+        platformPayableCents: platformPayable,
+        campaignCents: campaign, reimbursementCents: reimbursements, cancellationCents: cancellations, bookingFeeCents: bookingFees,
         vatCents: fare - fareNet,
         fareNetCents: fareNet,
         tipsCents: tips,
@@ -105,13 +117,13 @@ export async function fleetMirror(db, { period = 'month', referenceDate } = {}) 
   });
 
   const summary = rows.reduce((acc, row) => {
-    for (const key of ['fareGrossCents','vatCents','fareNetCents','tipsCents','tollsCents','settlementBaseCents','trips','hoursOnline','distanceKm']) acc[key] += Number(row.total[key] || 0);
+    for (const key of ['fareGrossCents','platformPayableCents','campaignCents','reimbursementCents','cancellationCents','bookingFeeCents','vatCents','fareNetCents','tipsCents','tollsCents','settlementBaseCents','trips','hoursOnline','distanceKm']) acc[key] += Number(row.total[key] || 0);
     acc.operatorGainCents += Number(row.settlement?.operator_gain_cents || 0);
     acc.driverEntitlementCents += Number(row.settlement?.driver_entitlement_cents || 0);
     acc.paymentsCents += Number(row.settlement?.payments_cents || 0);
     acc.balanceCents += Number(row.settlement?.balance_cents || 0);
     return acc;
-  }, { fareGrossCents:0, vatCents:0, fareNetCents:0, tipsCents:0, tollsCents:0, settlementBaseCents:0, trips:0, hoursOnline:0, distanceKm:0, operatorGainCents:0, driverEntitlementCents:0, paymentsCents:0, balanceCents:0 });
+  }, { fareGrossCents:0, platformPayableCents:0, campaignCents:0, reimbursementCents:0, cancellationCents:0, bookingFeeCents:0, vatCents:0, fareNetCents:0, tipsCents:0, tollsCents:0, settlementBaseCents:0, trips:0, hoursOnline:0, distanceKm:0, operatorGainCents:0, driverEntitlementCents:0, paymentsCents:0, balanceCents:0 });
 
   return { startDate, endDate, period, summary, drivers: rows };
 }

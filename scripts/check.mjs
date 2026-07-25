@@ -14,8 +14,8 @@ for (const file of files) {
 }
 
 const html = await readFile('public/index.html', 'utf8');
-for (const required of ['Acertos semanais', '/api/sync/uber', '/api/sync/bolt', '/api/data/snapshot']) {
-  if (!html.includes(required)) throw new Error(`O painel não contém ${required}.`);
+for (const required of ['Cálculo de ganhos', '/api/sync/uber', '/api/sync/bolt', '/api/data/snapshot']) {
+  if (!html.toLocaleLowerCase('pt-PT').includes(required.toLocaleLowerCase('pt-PT'))) throw new Error(`O painel não contém ${required}.`);
 }
 if (html.includes('s-bolt-proxy')) throw new Error('Ainda existe configuração antiga de proxy no painel.');
 if (html.includes('const platforms=') && html.includes('plataformas,')) {

@@ -170,8 +170,8 @@ export async function upsertFinancialEntry(db, input) {
     INSERT INTO financial_entries (
       id, platform, external_id, entry_type, driver_id, vehicle_id, occurred_at, service_date, status,
       trip_count, hours_online, hours_on_trip, gross_cents, net_cents, commission_cents, tip_cents,
-      toll_cents, cash_collected_cents, currency, distance_km, description, raw_json, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      toll_cents, campaign_cents, reimbursement_cents, cancellation_cents, booking_fee_cents, cash_collected_cents, currency, distance_km, description, raw_json, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     ON CONFLICT(platform, external_id) DO UPDATE SET
       entry_type = excluded.entry_type,
       driver_id = COALESCE(excluded.driver_id, financial_entries.driver_id),
@@ -187,6 +187,10 @@ export async function upsertFinancialEntry(db, input) {
       commission_cents = excluded.commission_cents,
       tip_cents = excluded.tip_cents,
       toll_cents = excluded.toll_cents,
+      campaign_cents = excluded.campaign_cents,
+      reimbursement_cents = excluded.reimbursement_cents,
+      cancellation_cents = excluded.cancellation_cents,
+      booking_fee_cents = excluded.booking_fee_cents,
       cash_collected_cents = excluded.cash_collected_cents,
       currency = excluded.currency,
       distance_km = excluded.distance_km,
@@ -198,7 +202,8 @@ export async function upsertFinancialEntry(db, input) {
     input.vehicleId || null, input.occurredAt, input.serviceDate, input.status || null,
     input.tripCount || 0, input.hoursOnline || 0, input.hoursOnTrip || 0,
     input.grossCents || 0, input.netCents || 0, input.commissionCents || 0,
-    input.tipCents || 0, input.tollCents || 0, input.cashCollectedCents || 0,
+    input.tipCents || 0, input.tollCents || 0, input.campaignCents || 0, input.reimbursementCents || 0,
+    input.cancellationCents || 0, input.bookingFeeCents || 0, input.cashCollectedCents || 0,
     input.currency || 'EUR', input.distanceKm || 0, input.description || null,
     JSON.stringify(input.raw || {}),
   ).run();

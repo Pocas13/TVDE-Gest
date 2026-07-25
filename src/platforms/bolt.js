@@ -211,8 +211,13 @@ async function syncBoltOrders(env, companyId, startTs, endTs) {
     const driverId = await findBoltDriver(env, row, companyId);
     const vehicleId = await findBoltVehicle(env, row, companyId);
     const price = row.order_price || {};
-    const gross = cents(Number(price.ride_price || 0) + Number(price.booking_fee || 0) +
-      Number(price.toll_fee || 0) + Number(price.cancellation_fee || 0) + Number(price.tip || 0));
+    const campaign = cents(price.campaign_earnings ?? price.campaign_bonus ?? price.bonus ?? 0);
+    const reimbursement = cents(price.expense_reimbursement ?? price.reimbursement ?? price.compensation ?? 0);
+    const cancellation = cents(price.cancellation_fee ?? 0);
+    const bookingFee = cents(price.booking_fee ?? price.reservation_fee ?? 0);
+    const tips = cents(price.tip ?? 0);
+    const tolls = cents(price.toll_fee ?? price.tolls ?? 0);
+    const gross = cents(Number(price.ride_price || 0)) + bookingFee + tolls + cancellation + tips + campaign + reimbursement;
     const net = price.net_earnings == null ? gross - Math.abs(cents(price.commission)) : cents(price.net_earnings);
     const timestamp = row.payment_confirmed_timestamp || row.order_finished_timestamp || row.order_created_timestamp;
     const occurredAt = isoFromUnixSeconds(timestamp);
@@ -220,7 +225,8 @@ async function syncBoltOrders(env, companyId, startTs, endTs) {
       platform: 'Bolt', externalId: String(row.order_reference), entryType: 'trip', driverId, vehicleId,
       occurredAt, serviceDate: lisbonDate(occurredAt), status: row.order_status,
       tripCount: row.order_status === 'finished' ? 1 : 0, grossCents: gross, netCents: net,
-      commissionCents: cents(price.commission), tipCents: cents(price.tip), tollCents: cents(price.toll_fee),
+      commissionCents: cents(price.commission), tipCents: tips, tollCents: tolls,
+      campaignCents: campaign, reimbursementCents: reimbursement, cancellationCents: cancellation, bookingFeeCents: bookingFee,
       currency: 'EUR', distanceKm: Number(row.ride_distance || 0),
       description: row.category_info?.name || 'Viagem Bolt', raw: row,
     });
