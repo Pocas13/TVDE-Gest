@@ -273,9 +273,12 @@ const DEFAULT_SETTINGS = {
   boltCompanyId:'',
   boltStartDate:daysAgoIso(7),
   boltEndDate:todayIso(),
+  uberOrgId:'',
+  settlementWeekStart:'',
 };
-let state = { vehicles: [], drivers: [], entries: [], settings: { ...DEFAULT_SETTINGS } };
+let state = { vehicles: [], drivers: [], entries: [], settings: { ...DEFAULT_SETTINGS }, settlements: [], settlementRules: [], syncRuns: [] };
 let currentView = 'painel';
+let serverDataAvailable = false;
 
 function uid(){ return globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2)+Date.now().toString(36); }
 
@@ -293,14 +296,41 @@ const storageAdapter = {
   }
 };
 
-async function loadAll(){
-  for (const key of ['vehicles','drivers','entries','settings']){
-    try{
-      const raw = await storageAdapter.get(STORE_KEYS[key]);
-      if(raw) state[key] = JSON.parse(raw);
-    }catch(e){ console.warn(`Não foi possível carregar ${key}.`, e); }
+async function apiFetch(path, options={}){
+  const response=await fetch(path,{...options,headers:{Accept:'application/json',...(options.body?{'Content-Type':'application/json'}:{}),...(options.headers||{})}});
+  const text=await response.text();
+  let data={}; try{ data=text?JSON.parse(text):{}; }catch{ data={error:text}; }
+  if(!response.ok||data.ok===false) throw new Error(data.error||`Pedido falhou (${response.status}).`);
+  return data;
+}
+
+async function reloadServerData(showToast=false){
+  try{
+    const data=await apiFetch('/api/data/snapshot');
+    state.drivers=data.drivers||[]; state.vehicles=data.vehicles||[]; state.entries=data.entries||[];
+    state.syncRuns=data.syncRuns||[]; serverDataAvailable=true;
+    if(showToast) toast('Dados atualizados da base de dados.');
+    return true;
+  }catch(error){
+    serverDataAvailable=false;
+    console.warn('D1 indisponível; a usar dados locais.',error);
+    return false;
   }
+}
+
+async function loadAll(){
+  try{
+    const raw = await storageAdapter.get(STORE_KEYS.settings);
+    if(raw) state.settings = JSON.parse(raw);
+  }catch(e){ console.warn('Não foi possível carregar definições.',e); }
   state.settings = { ...DEFAULT_SETTINGS, ...(state.settings||{}) };
+  const loadedServer=await reloadServerData(false);
+  if(!loadedServer){
+    for (const key of ['vehicles','drivers','entries']){
+      try{ const raw=await storageAdapter.get(STORE_KEYS[key]); if(raw) state[key]=JSON.parse(raw); }
+      catch(e){ console.warn(`Não foi possível carregar ${key}.`,e); }
+    }
+  }
 }
 async function save(key){
   try{
@@ -324,6 +354,7 @@ const NAV_ITEMS = [
   {id:'veiculos', label:'Veículos', icon:'car'},
   {id:'motoristas', label:'Motoristas', icon:'user'},
   {id:'registos', label:'Registos', icon:'list'},
+  {id:'acertos', label:'Acertos semanais', icon:'calc'},
   {id:'importar', label:'Importar CSV', icon:'upload'},
   {id:'integracoes', label:'Integrações', icon:'plug'},
 ];
@@ -333,6 +364,7 @@ const ICONS = {
   user:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="3.3"/><path d="M5 20c1-4 4-6 7-6s6 2 7 6"/></svg>',
   list:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>',
   upload:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>',
+  calc:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 7h8M8 11h2M14 11h2M8 15h2M14 15h2M8 19h2M14 19h2"/></svg>',
   plug:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 3v5M15 3v5M7 8h10l-1 5a4 4 0 0 1-4 3.2A4 4 0 0 1 8 13z"/><path d="M12 16.5V21"/></svg>',
 };
 
@@ -345,18 +377,19 @@ function renderNav(){
   nav.querySelectorAll('.nav-item').forEach(b=>b.addEventListener('click', ()=>{ currentView=b.dataset.view; render(); }));
 }
 
-const TITLES = {painel:'Painel', veiculos:'Veículos', motoristas:'Motoristas', registos:'Registos', importar:'Importar CSV', integracoes:'Integrações'};
+const TITLES = {painel:'Painel', veiculos:'Veículos', motoristas:'Motoristas', registos:'Registos', acertos:'Acertos semanais', importar:'Importar CSV', integracoes:'Integrações'};
 
 function render(){
   renderNav();
   document.getElementById('page-title').textContent = TITLES[currentView];
-  document.getElementById('topbar-meta').textContent = `Atualizado agora · ${state.entries.length} registos`;
+  document.getElementById('topbar-meta').textContent = `${serverDataAvailable?'Base D1':'Dados locais'} · ${state.entries.length} registos`;
   const c=document.getElementById('content');
   c.innerHTML='';
   if(currentView==='painel') renderPainel(c);
   else if(currentView==='veiculos') renderVeiculos(c);
   else if(currentView==='motoristas') renderMotoristas(c);
   else if(currentView==='registos') renderRegistos(c);
+  else if(currentView==='acertos') renderAcertos(c);
   else if(currentView==='importar') renderImportar(c);
   else if(currentView==='integracoes') renderIntegracoes(c);
 }
@@ -664,6 +697,123 @@ function openEntryModal(){
 }
 
 /* ============================================================
+   VISTA: ACERTOS SEMANAIS
+============================================================ */
+function browserPreviousMonday(){
+  const d=new Date(); const day=d.getDay(); const diff=(day+6)%7;
+  d.setDate(d.getDate()-diff-7); return d.toISOString().slice(0,10);
+}
+function centsEuro(value){ return money(Number(value||0)/100); }
+function settlementDirectionLabel(row){
+  if(row.balance_direction==='TO_DRIVER') return `Empresa paga ${centsEuro(row.balance_cents)}`;
+  if(row.balance_direction==='TO_COMPANY') return `Motorista paga ${centsEuro(Math.abs(row.balance_cents))}`;
+  return 'Acertado';
+}
+function modeLabel(mode){ return ({RENT_ONLY:'Apenas aluguer',FLEET_PAYOUT:'Frota paga motorista',PERCENTAGE:'Percentagem'})[mode]||mode; }
+
+function renderAcertos(c){
+  const week=state.settings.settlementWeekStart||browserPreviousMonday();
+  c.innerHTML=`
+    <div class="info-card">
+      <b>Três modelos disponíveis:</b><br>
+      <b>Apenas aluguer</b> — os rendimentos Uber/Bolt são informativos e o motorista deve o aluguer semanal.<br>
+      <b>Frota paga motorista</b> — a empresa recebe os rendimentos e paga líquido menos aluguer/taxas.<br>
+      <b>Percentagem</b> — o motorista recebe uma percentagem do líquido, deduzindo aluguer e taxas.
+    </div>
+    <div class="card" style="margin-bottom:18px;">
+      <div class="toolbar" style="margin:0;">
+        <div class="field" style="margin:0; min-width:220px;"><label>Segunda-feira da semana</label><input id="settlement-week" type="date" value="${esc(week)}"></div>
+        <div style="display:flex; gap:8px; align-items:end; flex-wrap:wrap;">
+          <button class="btn" id="load-settlements">Atualizar</button>
+          <button class="btn primary" id="calculate-settlements">Calcular/recalcular</button>
+        </div>
+      </div>
+      <pre id="settlement-log" style="margin-top:12px; background:var(--bg); border:1px solid var(--line); border-radius:7px; padding:10px; font-size:12px; color:var(--text-dim);">Pronto.</pre>
+    </div>
+    <div class="section-title">Resultado da semana</div>
+    <div id="settlements-table">A carregar…</div>
+    <div class="section-title">Regras por motorista</div>
+    <div id="settlement-rules">A carregar…</div>
+  `;
+  document.getElementById('load-settlements').addEventListener('click',()=>loadSettlementsView());
+  document.getElementById('calculate-settlements').addEventListener('click',()=>calculateSettlementsView());
+  loadSettlementsView();
+}
+
+async function loadSettlementsView(){
+  const week=document.getElementById('settlement-week')?.value||browserPreviousMonday();
+  state.settings.settlementWeekStart=week; await save('settings');
+  const log=document.getElementById('settlement-log'); if(log) log.textContent='A carregar acertos e regras…';
+  try{
+    const [settlementsData,rulesData]=await Promise.all([
+      apiFetch(`/api/settlements?week_start=${encodeURIComponent(week)}`),
+      apiFetch('/api/settlement-rules'),
+    ]);
+    state.settlements=settlementsData.settlements||[]; state.settlementRules=rulesData.rules||[];
+    renderSettlementsTable(); renderSettlementRules();
+    if(log) log.textContent=`${state.settlements.length} acerto(s) e ${state.settlementRules.length} regra(s) carregados.`;
+  }catch(error){
+    if(log) log.textContent='Erro: '+error.message;
+    document.getElementById('settlements-table').innerHTML=`<div class="empty-state"><p>${esc(error.message)}</p></div>`;
+  }
+}
+
+async function calculateSettlementsView(){
+  const week=document.getElementById('settlement-week')?.value||browserPreviousMonday();
+  const log=document.getElementById('settlement-log'); if(log) log.textContent='A calcular acertos…';
+  try{
+    await apiFetch('/api/settlements/calculate',{method:'POST',body:JSON.stringify({weekStart:week})});
+    if(log) log.textContent='Cálculo concluído. A atualizar resultados…';
+    await loadSettlementsView(); toast('Acertos semanais calculados.');
+  }catch(error){ if(log) log.textContent='Erro: '+error.message; }
+}
+
+function renderSettlementsTable(){
+  const wrap=document.getElementById('settlements-table'); if(!wrap) return;
+  if(!state.settlements.length){ wrap.innerHTML=emptyState('Ainda não existem acertos calculados para esta semana.','calc'); return; }
+  wrap.innerHTML=`<div class="table-wrap"><table>
+    <thead><tr><th>Motorista</th><th>Modelo</th><th>Bolt líquido</th><th>Uber líquido</th><th>Aluguer</th><th>Outros</th><th>Resultado</th><th>Estado</th></tr></thead>
+    <tbody>${state.settlements.map(row=>`<tr>
+      <td>${esc(row.driver_name)}</td><td>${esc(modeLabel(row.mode))}</td>
+      <td class="num">${centsEuro(row.bolt_net_cents)}</td><td class="num">${centsEuro(row.uber_net_cents)}</td>
+      <td class="num">${centsEuro(row.weekly_rent_cents)}</td>
+      <td class="num">${centsEuro(Number(row.operator_fee_cents||0)+Number(row.debits_cents||0)-Number(row.credits_cents||0))}</td>
+      <td class="num"><b>${esc(settlementDirectionLabel(row))}</b></td>
+      <td><span class="pill ${row.status==='paid'?'ativo':'manutencao'}">${esc(row.status)}</span></td>
+    </tr>`).join('')}</tbody></table></div>`;
+}
+
+function renderSettlementRules(){
+  const wrap=document.getElementById('settlement-rules'); if(!wrap) return;
+  if(!state.settlementRules.length){ wrap.innerHTML=emptyState('Sincroniza ou cria primeiro os motoristas.','user'); return; }
+  wrap.innerHTML=`<div class="table-wrap"><table>
+    <thead><tr><th>Ativa</th><th>Motorista</th><th>Modelo</th><th>Aluguer/semana</th><th>Percentagem motorista</th><th>Taxa fixa</th><th>Plataformas</th><th></th></tr></thead>
+    <tbody>${state.settlementRules.map(rule=>`<tr data-rule-driver="${esc(rule.driver_id)}">
+      <td><input class="rule-active" type="checkbox" ${Number(rule.active)===1?'checked':''}></td>
+      <td>${esc(rule.driver_name)}</td>
+      <td><select class="rule-mode"><option value="RENT_ONLY" ${rule.mode==='RENT_ONLY'?'selected':''}>Apenas aluguer</option><option value="FLEET_PAYOUT" ${rule.mode==='FLEET_PAYOUT'?'selected':''}>Frota paga motorista</option><option value="PERCENTAGE" ${rule.mode==='PERCENTAGE'?'selected':''}>Percentagem</option></select></td>
+      <td><input class="rule-rent" type="number" min="0" step="0.01" value="${Number(rule.weekly_rent_cents||0)/100}" style="width:110px"></td>
+      <td><input class="rule-share" type="number" min="0" max="100" step="0.01" value="${Number(rule.driver_share_basis_points||0)/100}" style="width:95px"> %</td>
+      <td><input class="rule-fee" type="number" min="0" step="0.01" value="${Number(rule.operator_fee_cents||0)/100}" style="width:95px"></td>
+      <td><label><input class="rule-bolt" type="checkbox" ${Number(rule.include_bolt)!==0?'checked':''}> Bolt</label> <label><input class="rule-uber" type="checkbox" ${Number(rule.include_uber)!==0?'checked':''}> Uber</label></td>
+      <td><button class="btn small save-rule">Guardar</button></td>
+    </tr>`).join('')}</tbody></table></div>`;
+  wrap.querySelectorAll('.save-rule').forEach(button=>button.addEventListener('click',async()=>{
+    const row=button.closest('tr'); button.disabled=true;
+    try{
+      await apiFetch('/api/settlement-rules',{method:'POST',body:JSON.stringify({
+        driverId:row.dataset.ruleDriver, active:row.querySelector('.rule-active').checked, mode:row.querySelector('.rule-mode').value,
+        weeklyRentCents:Math.round(Number(row.querySelector('.rule-rent').value||0)*100),
+        driverShareBasisPoints:Math.round(Number(row.querySelector('.rule-share').value||0)*100),
+        operatorFeeCents:Math.round(Number(row.querySelector('.rule-fee').value||0)*100),
+        includeBolt:row.querySelector('.rule-bolt').checked, includeUber:row.querySelector('.rule-uber').checked,
+      })}); toast('Regra semanal guardada.');
+    }catch(error){ toast('Erro: '+error.message); }
+    finally{ button.disabled=false; }
+  }));
+}
+
+/* ============================================================
    VISTA: IMPORTAR CSV
 ============================================================ */
 function renderImportar(c){
@@ -756,125 +906,109 @@ function renderIntegracoes(c){
   const s={...DEFAULT_SETTINGS,...state.settings};
   c.innerHTML = `
     <div class="info-card">
-      A ligação à Bolt é oficial e usa OAuth2. O <b>client_secret fica apenas no Cloudflare Worker</b>.
-      O painel e a API são publicados juntos no mesmo projeto Cloudflare, por isso não precisas de configurar um URL de proxy.
-      Protege o endereço do projeto com <b>Cloudflare Access</b> antes de o usares em produção.
+      <b>Arquitetura atual:</b> o Worker guarda as credenciais Bolt/Uber, a base D1 conserva os dados e os Cron Triggers sincronizam mesmo com o site fechado.
+      Protege o domínio com <b>Cloudflare Access</b> antes de o usares em produção.
     </div>
 
-    <div class="card" style="max-width:760px;">
-      <div class="field-row">
-        <div class="field"><label>Company ID</label><input id="s-bolt-company" type="number" min="1" value="${esc(s.boltCompanyId)}" placeholder="Descobrir automaticamente"></div>
-        <div class="field"><label>Moeda</label><select id="s-moeda"><option value="EUR">EUR (€)</option></select></div>
+    <div class="grid" style="grid-template-columns:1fr 1fr; margin-bottom:18px;">
+      <div class="card">
+        <div style="font-family:var(--font-display);font-size:18px;font-weight:600;margin-bottom:12px;"><span class="pill bolt">Bolt</span> Integração</div>
+        <div class="field"><label>Company ID</label><input id="s-bolt-company" value="${esc(s.boltCompanyId)}" placeholder="Descobrir automaticamente"></div>
+        <p style="font-size:12px;color:var(--text-dim);">Secrets: BOLT_CLIENT_ID e BOLT_CLIENT_SECRET.</p>
       </div>
+      <div class="card">
+        <div style="font-family:var(--font-display);font-size:18px;font-weight:600;margin-bottom:12px;"><span class="pill uber">Uber</span> Integração</div>
+        <div class="field"><label>Organization ID</label><input id="s-uber-org" value="${esc(s.uberOrgId)}" placeholder="Descobrir após aprovação da Uber"></div>
+        <p style="font-size:12px;color:var(--text-dim);">Secrets: UBER_CLIENT_ID e UBER_CLIENT_SECRET. O acesso Fleet Supplier tem de ser aprovado pela Uber.</p>
+      </div>
+    </div>
+
+    <div class="card" style="max-width:900px;">
       <div class="field-row">
         <div class="field"><label>Desde</label><input id="s-bolt-start" type="date" value="${esc(s.boltStartDate)}"></div>
         <div class="field"><label>Até, inclusive</label><input id="s-bolt-end" type="date" value="${esc(s.boltEndDate)}"></div>
       </div>
-      <div style="display:flex; gap:8px; flex-wrap:wrap;">
-        <button class="btn" id="save-settings">Guardar</button>
-        <button class="btn" id="test-bolt-proxy">Testar ligação</button>
-        <button class="btn" id="discover-company">Descobrir empresa</button>
-        <button class="btn primary" id="sync-all-bolt">Sincronizar tudo</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn" id="integration-status">Testar integrações</button>
+        <button class="btn" id="save-platform-ids">Guardar IDs</button>
+        <button class="btn bolt" id="server-sync-bolt">Sincronizar Bolt</button>
+        <button class="btn uber" id="server-sync-uber">Sincronizar Uber</button>
+        <button class="btn primary" id="server-sync-all">Sincronizar tudo</button>
+        <button class="btn" id="reload-d1">Atualizar painel</button>
+        <button class="btn" id="import-local-d1">Migrar dados locais para D1</button>
       </div>
-      <div id="bolt-test-result" style="margin-top:12px; font-size:13px;"></div>
-      <pre id="bolt-sync-log" style="margin-top:12px; background:var(--bg); border:1px solid var(--line); border-radius:7px; padding:12px; font-family:var(--font-mono); font-size:12px; max-height:260px; overflow:auto; white-space:pre-wrap; color:var(--text-dim);">Pronto.</pre>
+      <pre id="bolt-sync-log" style="margin-top:12px;background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:12px;font-family:var(--font-mono);font-size:12px;max-height:320px;overflow:auto;white-space:pre-wrap;color:var(--text-dim);">Pronto.</pre>
     </div>
 
-    <div class="section-title">Sincronização seletiva</div>
-    <div class="card" style="max-width:760px; display:flex; gap:8px; flex-wrap:wrap;">
-      <button class="btn" id="sync-drivers">Motoristas</button>
-      <button class="btn" id="sync-vehicles">Veículos</button>
-      <button class="btn" id="sync-orders">Viagens e valores</button>
-    </div>
-
-    <details style="max-width:760px; margin-top:24px;">
-      <summary class="section-title" style="cursor:pointer;">Explorador API avançado</summary>
-      <p style="font-size:12.5px; color:var(--text-dim); margin-bottom:12px;">
-        Os corpos abaixo já respeitam os campos obrigatórios do OpenAPI fornecido pela Bolt.
-      </p>
-      <div class="card">
-        <div class="field">
-          <label>Endpoint</label>
-          <select id="api-endpoint">
-            <option value="getCompanies" data-method="GET">Empresas — getCompanies</option>
-            <option value="test" data-method="POST">Teste oficial — test</option>
-            <option value="getDrivers" data-method="POST">Motoristas — getDrivers</option>
-            <option value="getVehicles" data-method="POST">Veículos — getVehicles</option>
-            <option value="getFleetOrders" data-method="POST">Viagens — getFleetOrders</option>
-            <option value="getFleetStateLogs" data-method="POST">Estados — getFleetStateLogs</option>
-          </select>
-        </div>
-        <div class="field" id="api-body-field">
-          <label>Corpo JSON</label>
-          <textarea id="api-body" rows="9" style="font-family:var(--font-mono); font-size:12.5px;"></textarea>
-        </div>
-        <button class="btn primary" id="api-send">Enviar pedido</button>
-        <pre id="api-response" style="margin-top:12px; background:var(--bg); border:1px solid var(--line); border-radius:7px; padding:12px; font-family:var(--font-mono); font-size:12px; max-height:360px; overflow:auto; white-space:pre-wrap; color:var(--text-dim);">—</pre>
-      </div>
-    </details>
-
-    <div class="section-title">Dados locais</div>
-    <div class="card" style="max-width:760px; display:flex; justify-content:space-between; align-items:center; gap:16px;">
-      <div style="font-size:13px; color:var(--text-dim);">Apaga veículos, motoristas e registos guardados neste navegador. Não elimina nada na Bolt.</div>
-      <button class="btn danger" id="reset-all">Repor tudo</button>
+    <div class="section-title">Sincronização automática</div>
+    <div class="card" style="max-width:900px;line-height:1.65;font-size:13px;color:var(--text-dim);">
+      <b style="color:var(--text);">A cada 2 horas:</b> atualiza motoristas, viaturas e movimentos recentes da Bolt e da Uber.<br>
+      <b style="color:var(--text);">Segunda-feira às 05:30 UTC:</b> calcula automaticamente os acertos da semana anterior.<br>
+      As execuções ficam registadas na tabela <code>sync_runs</code> da base D1 e nos logs do Cloudflare Worker.
     </div>
   `;
 
-  const persistSettings = async () => {
-        state.settings={
-      ...state.settings,
-      moeda:document.getElementById('s-moeda').value,
-      boltCompanyId:document.getElementById('s-bolt-company').value.trim(),
-      boltStartDate:document.getElementById('s-bolt-start').value,
-      boltEndDate:document.getElementById('s-bolt-end').value,
-    };
+  const persistLocalSettings=async()=>{
+    state.settings.boltCompanyId=document.getElementById('s-bolt-company').value.trim();
+    state.settings.uberOrgId=document.getElementById('s-uber-org').value.trim();
+    state.settings.boltStartDate=document.getElementById('s-bolt-start').value;
+    state.settings.boltEndDate=document.getElementById('s-bolt-end').value;
     await save('settings');
   };
-
-  document.getElementById('save-settings').addEventListener('click', async()=>{
-    try{ await persistSettings(); toast('Definições guardadas.'); }
-    catch(e){ toast(e.message); }
+  const dateOptions=()=>({
+    startTs:dateStartTs(document.getElementById('s-bolt-start').value),
+    endTs:dateEndExclusiveTs(document.getElementById('s-bolt-end').value),
+    startMs:dateStartTs(document.getElementById('s-bolt-start').value)*1000,
+    endMs:dateEndExclusiveTs(document.getElementById('s-bolt-end').value)*1000,
   });
-
-  document.getElementById('test-bolt-proxy').addEventListener('click', async()=>{
-    const result=document.getElementById('bolt-test-result');
+  const runServerSync=async(path,payload,label)=>{
+    const log=document.getElementById('bolt-sync-log'); log.textContent=`A sincronizar ${label}…`;
     try{
-      await persistSettings(); result.textContent='A testar…';
-      const data=await boltFetch('/api/test-connection','GET');
-      result.textContent='✓ '+(data.message||'Ligação estabelecida.');
-      result.style.color='var(--bolt)';
-    }catch(e){ result.textContent='✗ '+e.message; result.style.color='var(--danger)'; }
-  });
+      await persistLocalSettings();
+      const result=await apiFetch(path,{method:'POST',body:JSON.stringify(payload)});
+      log.textContent=`${label} sincronizada com sucesso.
 
-  document.getElementById('discover-company').addEventListener('click', async()=>{
-    try{ await persistSettings(); await discoverBoltCompany(true); }
-    catch(e){ syncLog('Erro: '+e.message, true); }
-  });
-  document.getElementById('sync-drivers').addEventListener('click', ()=>runBoltAction(syncBoltDrivers));
-  document.getElementById('sync-vehicles').addEventListener('click', ()=>runBoltAction(syncBoltVehicles));
-  document.getElementById('sync-orders').addEventListener('click', ()=>runBoltAction(syncBoltOrders));
-  document.getElementById('sync-all-bolt').addEventListener('click', async()=>{
+${JSON.stringify(result.result||result,null,2)}`;
+      await reloadServerData(false); render(); toast(`${label} sincronizada.`);
+    }catch(error){ log.textContent='Erro: '+error.message; }
+  };
+
+  document.getElementById('integration-status').addEventListener('click',async()=>{
+    const log=document.getElementById('bolt-sync-log'); log.textContent='A testar configurações…';
     try{
-      await persistSettings();
-      syncLog('A iniciar sincronização completa…', true);
-      if(!Number(state.settings.boltCompanyId)) await discoverBoltCompany(false);
-      await syncBoltDrivers();
-      await syncBoltVehicles();
-      await syncBoltOrders();
-      state.settings.boltLastSync=new Date().toLocaleString('pt-PT');
-      await save('settings');
-      syncLog('Sincronização completa concluída.');
-      toast('Bolt sincronizada com sucesso.');
-      render();
-    }catch(e){ syncLog('Erro: '+e.message); }
+      const data=await apiFetch('/api/integrations/status');
+      const boltId=data.bolt.companyIds?.[0]; const uberOrg=data.uber.organizations?.[0]?.id;
+      if(boltId&&!document.getElementById('s-bolt-company').value) document.getElementById('s-bolt-company').value=boltId;
+      if(uberOrg&&!document.getElementById('s-uber-org').value) document.getElementById('s-uber-org').value=uberOrg;
+      log.textContent=JSON.stringify(data,null,2);
+    }catch(error){ log.textContent='Erro: '+error.message; }
   });
-
-  setupApiExplorer();
-  document.getElementById('reset-all').addEventListener('click', ()=>{
-    if(!confirm('Tens a certeza? Esta ação apaga todos os dados guardados localmente.')) return;
-    state.vehicles=[]; state.drivers=[]; state.entries=[];
-    save('vehicles'); save('drivers'); save('entries');
-    toast('Dados locais apagados.'); render();
+  document.getElementById('save-platform-ids').addEventListener('click',async()=>{
+    try{
+      await persistLocalSettings();
+      await apiFetch('/api/settings/platform',{method:'POST',body:JSON.stringify({boltCompanyId:state.settings.boltCompanyId,uberOrgId:state.settings.uberOrgId})});
+      toast('IDs das plataformas guardados.');
+    }catch(error){ toast('Erro: '+error.message); }
+  });
+  document.getElementById('server-sync-bolt').addEventListener('click',()=>{
+    const r=dateOptions(); runServerSync('/api/sync/bolt',{companyId:Number(document.getElementById('s-bolt-company').value)||undefined,startTs:r.startTs,endTs:r.endTs},'Bolt');
+  });
+  document.getElementById('server-sync-uber').addEventListener('click',()=>{
+    const r=dateOptions(); runServerSync('/api/sync/uber',{orgId:document.getElementById('s-uber-org').value||undefined,startMs:r.startMs,endMs:r.endMs},'Uber');
+  });
+  document.getElementById('server-sync-all').addEventListener('click',()=>{
+    const r=dateOptions(); runServerSync('/api/sync/all',{bolt:{companyId:Number(document.getElementById('s-bolt-company').value)||undefined,startTs:r.startTs,endTs:r.endTs},uber:{orgId:document.getElementById('s-uber-org').value||undefined,startMs:r.startMs,endMs:r.endMs}},'Bolt e Uber');
+  });
+  document.getElementById('reload-d1').addEventListener('click',async()=>{ await reloadServerData(true); render(); });
+  document.getElementById('import-local-d1').addEventListener('click',async()=>{
+    const log=document.getElementById('bolt-sync-log');
+    try{
+      const drivers=JSON.parse(await storageAdapter.get(STORE_KEYS.drivers)||'[]');
+      const vehicles=JSON.parse(await storageAdapter.get(STORE_KEYS.vehicles)||'[]');
+      const entries=JSON.parse(await storageAdapter.get(STORE_KEYS.entries)||'[]');
+      const data=await apiFetch('/api/data/import-local',{method:'POST',body:JSON.stringify({drivers,vehicles,entries})});
+      log.textContent='Migração concluída\n'+JSON.stringify(data.imported,null,2); await reloadServerData(false); render();
+    }catch(error){ log.textContent='Erro: '+error.message; }
   });
 }
 

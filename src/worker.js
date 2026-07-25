@@ -1,41 +1,22 @@
 /**
- * TVDE Gest — aplicação Cloudflare Worker + painel estático.
- *
- * Secrets obrigatórios no Cloudflare:
- *   BOLT_CLIENT_ID
- *   BOLT_CLIENT_SECRET
- *
- * O painel e a API usam a mesma origem. Nunca coloques segredos no HTML,
- * no GitHub, no wrangler.jsonc ou em variáveis NEXT_PUBLIC/VITE.
- * Protege o domínio do projeto com Cloudflare Access em produção.
+ * TVDE Gest — Cloudflare Worker, D1, Bolt e Uber.
+ * Protege o domínio com Cloudflare Access em produção.
  */
+import { snapshot, setSetting, upsertDriver, upsertVehicle, upsertFinancialEntry } from './db.js';
+import { boltRequest, getBoltCompanyIds, syncBolt } from './platforms/bolt.js';
+import { getUberOrganizations, syncUber } from './platforms/uber.js';
+import {
+  addSettlementAdjustment, calculateSettlements, listSettlementRules,
+  listSettlements, previousMonday, upsertSettlementRule,
+} from './settlements.js';
 
-const TOKEN_URL = 'https://oidc.bolt.eu/token';
-const API_BASE = 'https://node.bolt.eu/fleet-integration-gateway';
-const API_PREFIX = '/fleetIntegration/v1';
-const TOKEN_SAFETY_WINDOW_MS = 60_000;
-const UPSTREAM_TIMEOUT_MS = 20_000;
-const MAX_BODY_BYTES = 64 * 1024;
+class HttpError extends Error {
+  constructor(status, code, message) {
+    super(message); this.status = status; this.code = code;
+  }
+}
 
-let cachedToken = null;
-let cachedTokenExpiry = 0;
-
-const ROUTES = Object.freeze({
-  '/api/companies': { method: 'GET', upstream: 'getCompanies', validator: null },
-  '/api/getCompanies': { method: 'GET', upstream: 'getCompanies', validator: null },
-
-  '/api/test': { method: 'POST', upstream: 'test', validator: validateTestRequest },
-  '/api/orders': { method: 'POST', upstream: 'getFleetOrders', validator: validateOrdersRequest },
-  '/api/getFleetOrders': { method: 'POST', upstream: 'getFleetOrders', validator: validateOrdersRequest },
-  '/api/state-logs': { method: 'POST', upstream: 'getFleetStateLogs', validator: validateCompanyPageRequest },
-  '/api/getFleetStateLogs': { method: 'POST', upstream: 'getFleetStateLogs', validator: validateCompanyPageRequest },
-  '/api/drivers': { method: 'POST', upstream: 'getDrivers', validator: validateDriversRequest },
-  '/api/getDrivers': { method: 'POST', upstream: 'getDrivers', validator: validateDriversRequest },
-  '/api/vehicles': { method: 'POST', upstream: 'getVehicles', validator: validateVehiclesRequest },
-  '/api/getVehicles': { method: 'POST', upstream: 'getVehicles', validator: validateVehiclesRequest },
-});
-
-function jsonResponse(payload, status = 200, extraHeaders = {}) {
+function json(payload, status = 200) {
   return new Response(JSON.stringify(payload), {
     status,
     headers: {
@@ -44,388 +25,217 @@ function jsonResponse(payload, status = 200, extraHeaders = {}) {
       'X-Content-Type-Options': 'nosniff',
       'Referrer-Policy': 'no-referrer',
       'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
-      ...extraHeaders,
     },
   });
 }
 
-function parseBoolean(value, fallback = false) {
-  if (value == null || value === '') return fallback;
-  return String(value).toLowerCase() === 'true';
-}
-
-function allowedOrigins(env) {
-  return String(env.ALLOWED_ORIGINS || env.ALLOWED_ORIGIN || '')
-    .split(',')
-    .map((value) => value.trim().replace(/\/$/, ''))
-    .filter(Boolean);
-}
-
-function corsHeaders(request, env) {
-  const origin = request.headers.get('Origin');
-  const allowed = allowedOrigins(env);
-  const allowNoOrigin = parseBoolean(env.ALLOW_NO_ORIGIN, false);
-
-  if (!origin) {
-    if (!allowNoOrigin) {
-      return { ok: false, headers: {}, reason: 'Pedidos sem Origin não são permitidos.' };
-    }
-    return {
-      ok: true,
-      headers: {
-        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type',
-        'Access-Control-Max-Age': '86400',
-        'Access-Control-Allow-Credentials': 'true',
-        Vary: 'Origin',
-      },
-    };
-  }
-
-  const normalized = origin.replace(/\/$/, '');
-  if (!allowed.length || !allowed.includes(normalized)) {
-    return { ok: false, headers: {}, reason: 'Origem não autorizada.' };
-  }
-
-  return {
-    ok: true,
-    headers: {
-      'Access-Control-Allow-Origin': origin,
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
-      'Access-Control-Max-Age': '86400',
-      'Access-Control-Allow-Credentials': 'true',
-      Vary: 'Origin',
-    },
-  };
-}
-
-function validateEnvironment(env) {
-  const missing = [];
-  if (!env.BOLT_CLIENT_ID) missing.push('BOLT_CLIENT_ID');
-  if (!env.BOLT_CLIENT_SECRET) missing.push('BOLT_CLIENT_SECRET');
-  if (missing.length) {
-    throw new HttpError(500, 'CONFIGURATION_ERROR', `Secrets em falta no Cloudflare: ${missing.join(', ')}.`);
-  }
+function assertAccess(request, env) {
+  if (String(env.REQUIRE_CF_ACCESS || '').toLowerCase() !== 'true') return;
+  const email = request.headers.get('CF-Access-Authenticated-User-Email');
+  if (!email) throw new HttpError(401, 'ACCESS_REQUIRED', 'Acesso protegido pelo Cloudflare Access obrigatório.');
 }
 
 function assertSameOrigin(request) {
+  if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method)) return;
   const origin = request.headers.get('Origin');
-  if (!origin) return;
-  const requestOrigin = new URL(request.url).origin;
-  if (origin !== requestOrigin) {
-    throw new HttpError(403, 'ORIGIN_NOT_ALLOWED', 'Pedido proveniente de outra origem não autorizado.');
+  if (origin && origin !== new URL(request.url).origin) {
+    throw new HttpError(403, 'ORIGIN_NOT_ALLOWED', 'Pedido de outra origem não autorizado.');
   }
 }
 
-class HttpError extends Error {
-  constructor(status, code, message, details) {
-    super(message);
-    this.name = 'HttpError';
-    this.status = status;
-    this.code = code;
-    this.details = details;
-  }
+function requireDb(env) {
+  if (!env.DB) throw new HttpError(503, 'D1_NOT_CONFIGURED', 'Liga uma base de dados D1 ao binding DB.');
 }
 
-function requireObject(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new HttpError(400, 'INVALID_JSON_BODY', 'O corpo do pedido deve ser um objeto JSON.');
-  }
-  return { ...value };
-}
-
-function requireInteger(body, field, { min = Number.MIN_SAFE_INTEGER, max = Number.MAX_SAFE_INTEGER } = {}) {
-  const value = body[field];
-  if (!Number.isInteger(value) || value < min || value > max) {
-    throw new HttpError(400, 'INVALID_FIELD', `O campo ${field} deve ser um número inteiro entre ${min} e ${max}.`);
-  }
-}
-
-function requireCompanyId(body) {
-  requireInteger(body, 'company_id', { min: 1 });
-}
-
-function requireTimeRange(body) {
-  requireInteger(body, 'start_ts', { min: 1 });
-  requireInteger(body, 'end_ts', { min: 1 });
-  if (body.start_ts >= body.end_ts) {
-    throw new HttpError(400, 'INVALID_DATE_RANGE', 'start_ts tem de ser anterior a end_ts.');
-  }
-}
-
-function requirePager(body, maxLimit) {
-  requireInteger(body, 'offset', { min: 0 });
-  requireInteger(body, 'limit', { min: 1, max: maxLimit });
-}
-
-function validateOptionalFilters(body) {
-  if (body.portal_status != null && !['active', 'blocked', 'deactivated'].includes(body.portal_status)) {
-    throw new HttpError(400, 'INVALID_PORTAL_STATUS', 'portal_status deve ser active, blocked ou deactivated.');
-  }
-  if (body.search != null) {
-    if (typeof body.search !== 'string' || body.search.length < 1 || body.search.length > 255) {
-      throw new HttpError(400, 'INVALID_SEARCH', 'search deve ter entre 1 e 255 caracteres.');
-    }
-  }
-}
-
-function normalizeCompanyIds(body) {
-  if (body.company_id != null && body.company_ids == null) {
-    body.company_ids = [body.company_id];
-  }
-  if (!Array.isArray(body.company_ids) || body.company_ids.length === 0) {
-    throw new HttpError(400, 'INVALID_COMPANY_IDS', 'company_ids deve ser uma lista com pelo menos um company_id.');
-  }
-  if (!body.company_ids.every((id) => Number.isInteger(id) && id > 0)) {
-    throw new HttpError(400, 'INVALID_COMPANY_IDS', 'Todos os valores de company_ids devem ser números inteiros positivos.');
-  }
-  return body;
-}
-
-function validateTestRequest(input) {
-  const body = normalizeCompanyIds(requireObject(input));
-  requirePager(body, 1000);
-  requireTimeRange(body);
-  return body;
-}
-
-function validateOrdersRequest(input) {
-  const body = normalizeCompanyIds(requireObject(input));
-  requirePager(body, 1000);
-  requireTimeRange(body);
-  if (body.company_id != null) requireInteger(body, 'company_id', { min: 1 });
-  if (body.time_range_filter_type != null && !['price_review', 'created'].includes(body.time_range_filter_type)) {
-    throw new HttpError(400, 'INVALID_TIME_FILTER', 'time_range_filter_type deve ser price_review ou created.');
-  }
-  return body;
-}
-
-function validateCompanyPageRequest(input) {
-  const body = requireObject(input);
-  requireCompanyId(body);
-  requirePager(body, 1000);
-  requireTimeRange(body);
-  return body;
-}
-
-function validateDriversRequest(input) {
-  const body = validateCompanyPageRequest(input);
-  validateOptionalFilters(body);
-  return body;
-}
-
-function validateVehiclesRequest(input) {
-  const body = requireObject(input);
-  requireCompanyId(body);
-  requirePager(body, 100);
-  requireTimeRange(body);
-  validateOptionalFilters(body);
-  return body;
-}
-
-async function readJsonBody(request) {
-  const contentLength = Number(request.headers.get('Content-Length') || 0);
-  if (contentLength > MAX_BODY_BYTES) {
-    throw new HttpError(413, 'BODY_TOO_LARGE', 'O corpo do pedido excede o limite permitido.');
-  }
-
-  const contentType = request.headers.get('Content-Type') || '';
-  if (!contentType.toLowerCase().includes('application/json')) {
-    throw new HttpError(415, 'UNSUPPORTED_MEDIA_TYPE', 'Usa Content-Type: application/json.');
-  }
-
+async function bodyJson(request) {
+  if (request.method === 'GET') return {};
   const text = await request.text();
-  if (new TextEncoder().encode(text).byteLength > MAX_BODY_BYTES) {
-    throw new HttpError(413, 'BODY_TOO_LARGE', 'O corpo do pedido excede o limite permitido.');
-  }
-
-  try {
-    return JSON.parse(text || '{}');
-  } catch {
-    throw new HttpError(400, 'INVALID_JSON', 'O corpo contém JSON inválido.');
-  }
+  if (!text) return {};
+  try { return JSON.parse(text); } catch { throw new HttpError(400, 'INVALID_JSON', 'JSON inválido.'); }
 }
 
-async function fetchWithTimeout(url, init, timeoutMs = UPSTREAM_TIMEOUT_MS) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(url, { ...init, signal: controller.signal });
-  } catch (error) {
-    if (error?.name === 'AbortError') {
-      throw new HttpError(504, 'UPSTREAM_TIMEOUT', 'A Bolt demorou demasiado tempo a responder.');
-    }
-    throw error;
-  } finally {
-    clearTimeout(timer);
-  }
+function legacySnapshot(data) {
+  return {
+    drivers: data.drivers.map((row) => ({
+      id: row.id, nome: row.name, contacto: row.phone || '', email: row.email || '',
+      vehicleId: row.current_vehicle_id || '', plataformas: row.platforms ? row.platforms.split(',') : [],
+      licenca: row.tvde_license || '', estado: row.status,
+    })),
+    vehicles: data.vehicles.map((row) => ({
+      id: row.id, matricula: row.license_plate,
+      modelo: [row.make, row.model].filter(Boolean).join(' ') || '', ano: row.year || '',
+      driverId: row.current_driver_id || '', estado: row.status === 'active' ? 'Ativo' : 'Parado',
+      vin: row.vin || '', lugares: row.seats || '',
+    })),
+    entries: data.entries.map((row) => ({
+      id: row.id, externalId: row.external_id, data: row.service_date, plataforma: row.platform,
+      driverId: row.driver_id || '', vehicleId: row.vehicle_id || '', viagens: row.trip_count,
+      horas: row.hours_online, bruto: row.gross_cents / 100,
+      despesas: Math.max(0, row.gross_cents - row.net_cents) / 100,
+      liquido: row.net_cents / 100, commission: row.commission_cents / 100,
+      tip: row.tip_cents / 100, tollFee: row.toll_cents / 100,
+      status: row.status || '', distance: row.distance_km,
+      source: `${row.platform} API`, updatedAt: row.updated_at,
+    })),
+    syncRuns: data.syncRuns,
+  };
 }
 
-async function getAccessToken(env, forceRefresh = false) {
-  const now = Date.now();
-  if (!forceRefresh && cachedToken && now < cachedTokenExpiry - TOKEN_SAFETY_WINDOW_MS) {
-    return cachedToken;
+async function importLocalSnapshot(env, input) {
+  let drivers = 0, vehicles = 0, entries = 0;
+  const driverMap = new Map();
+  const vehicleMap = new Map();
+
+  for (const item of input.drivers || []) {
+    const driverId = await upsertDriver(env.DB, {
+      platform: null, name: item.nome, phone: item.contacto, email: item.email,
+      tvdeLicense: item.licenca, status: item.estado || 'active',
+    });
+    if (item.id) driverMap.set(item.id, driverId);
+    drivers += 1;
   }
-
-  const body = new URLSearchParams({
-    client_id: env.BOLT_CLIENT_ID,
-    client_secret: env.BOLT_CLIENT_SECRET,
-    grant_type: 'client_credentials',
-    scope: 'fleet-integration:api',
-  });
-
-  const response = await fetchWithTimeout(TOKEN_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      Accept: 'application/json',
-    },
-    body: body.toString(),
-  });
-
-  const text = await response.text();
-  let data;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    data = null;
+  for (const item of input.vehicles || []) {
+    const vehicleId = await upsertVehicle(env.DB, {
+      platform: null, licensePlate: item.matricula, model: item.modelo,
+      year: Number(item.ano) || null, vin: item.vin, seats: Number(item.lugares) || null,
+      status: item.estado === 'Ativo' ? 'active' : 'inactive',
+      currentDriverId: driverMap.get(item.driverId) || null,
+    });
+    if (item.id && vehicleId) vehicleMap.set(item.id, vehicleId);
+    vehicles += 1;
   }
-
-  if (!response.ok || !data?.access_token || !Number.isFinite(Number(data.expires_in))) {
-    cachedToken = null;
-    cachedTokenExpiry = 0;
-    throw new HttpError(
-      502,
-      'BOLT_AUTH_FAILED',
-      'Não foi possível autenticar na Bolt.',
-      { upstream_status: response.status, upstream_response: data || text.slice(0, 500) },
-    );
+  for (const item of input.entries || []) {
+    const externalId = item.externalId || `local:${item.id || crypto.randomUUID()}`;
+    await upsertFinancialEntry(env.DB, {
+      platform: item.plataforma === 'Uber' ? 'Uber' : item.plataforma === 'Bolt' ? 'Bolt' : 'Manual',
+      externalId, entryType: 'manual_import',
+      driverId: driverMap.get(item.driverId) || null,
+      vehicleId: vehicleMap.get(item.vehicleId) || null,
+      occurredAt: `${item.data}T12:00:00.000Z`, serviceDate: item.data,
+      tripCount: Number(item.viagens || 0), hoursOnline: Number(item.horas || 0),
+      grossCents: Math.round(Number(item.bruto || 0) * 100),
+      netCents: Math.round(Number(item.liquido ?? (Number(item.bruto || 0) - Number(item.despesas || 0))) * 100),
+      commissionCents: Math.round(Number(item.commission || 0) * 100),
+      tipCents: Math.round(Number(item.tip || 0) * 100),
+      tollCents: Math.round(Number(item.tollFee || 0) * 100),
+      currency: 'EUR', description: 'Importação local', raw: item,
+    });
+    entries += 1;
   }
-
-  cachedToken = data.access_token;
-  cachedTokenExpiry = now + Number(data.expires_in) * 1000;
-  return cachedToken;
+  return { drivers, vehicles, entries };
 }
 
-async function callBolt(upstreamEndpoint, body, env, retryAuth = true) {
-  const token = await getAccessToken(env);
-  const isGet = upstreamEndpoint === 'getCompanies';
+async function handleApi(request, env) {
+  assertAccess(request, env);
+  assertSameOrigin(request);
+  const url = new URL(request.url);
+  const path = url.pathname;
 
-  const response = await fetchWithTimeout(`${API_BASE}${API_PREFIX}/${upstreamEndpoint}`, {
-    method: isGet ? 'GET' : 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/json',
-      ...(isGet ? {} : { 'Content-Type': 'application/json' }),
-    },
-    ...(isGet ? {} : { body: JSON.stringify(body) }),
-  });
-
-  if (response.status === 401 && retryAuth) {
-    cachedToken = null;
-    cachedTokenExpiry = 0;
-    await getAccessToken(env, true);
-    return callBolt(upstreamEndpoint, body, env, false);
+  if (path === '/api/health') {
+    return json({ ok: true, app: 'TVDE Gest', d1: Boolean(env.DB), bolt: Boolean(env.BOLT_CLIENT_ID && env.BOLT_CLIENT_SECRET), uber: Boolean(env.UBER_CLIENT_ID && env.UBER_CLIENT_SECRET) });
   }
 
-  const text = await response.text();
-  let payload;
-  try {
-    payload = JSON.parse(text);
-  } catch {
-    payload = { code: response.status, message: text || 'Resposta não JSON recebida da Bolt.' };
+  if (path === '/api/companies' || path === '/api/getCompanies') {
+    return json(await boltRequest(env, 'getCompanies'));
+  }
+  const boltRoutes = {
+    '/api/test': 'test', '/api/orders': 'getFleetOrders', '/api/getFleetOrders': 'getFleetOrders',
+    '/api/state-logs': 'getFleetStateLogs', '/api/getFleetStateLogs': 'getFleetStateLogs',
+    '/api/drivers': 'getDrivers', '/api/getDrivers': 'getDrivers',
+    '/api/vehicles': 'getVehicles', '/api/getVehicles': 'getVehicles',
+  };
+  if (boltRoutes[path]) {
+    if (request.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Usa POST.');
+    return json(await boltRequest(env, boltRoutes[path], { method: 'POST', body: await bodyJson(request) }));
   }
 
-  if (!response.ok) {
-    throw new HttpError(
-      response.status >= 500 ? 502 : response.status,
-      'BOLT_API_ERROR',
-      payload?.message || `A Bolt devolveu o estado HTTP ${response.status}.`,
-      { upstream_status: response.status, upstream_response: payload },
-    );
+  requireDb(env);
+
+  if (path === '/api/data/snapshot' && request.method === 'GET') {
+    return json({ ok: true, ...legacySnapshot(await snapshot(env.DB)) });
+  }
+  if (path === '/api/data/import-local' && request.method === 'POST') {
+    return json({ ok: true, imported: await importLocalSnapshot(env, await bodyJson(request)) });
   }
 
-  return payload;
+  if (path === '/api/integrations/status' && request.method === 'GET') {
+    const boltIds = env.BOLT_CLIENT_ID && env.BOLT_CLIENT_SECRET ? await getBoltCompanyIds(env).catch(() => []) : [];
+    const uberOrgs = env.UBER_CLIENT_ID && env.UBER_CLIENT_SECRET ? await getUberOrganizations(env).catch(() => []) : [];
+    return json({
+      ok: true,
+      bolt: { configured: Boolean(env.BOLT_CLIENT_ID && env.BOLT_CLIENT_SECRET), companyIds: boltIds },
+      uber: { configured: Boolean(env.UBER_CLIENT_ID && env.UBER_CLIENT_SECRET), organizations: uberOrgs },
+    });
+  }
+
+  if (path === '/api/settings/platform' && request.method === 'POST') {
+    const input = await bodyJson(request);
+    if (input.boltCompanyId) await setSetting(env.DB, 'bolt_company_id', input.boltCompanyId);
+    if (input.uberOrgId) await setSetting(env.DB, 'uber_org_id', input.uberOrgId);
+    return json({ ok: true });
+  }
+
+  if (path === '/api/sync/bolt' && request.method === 'POST') {
+    return json({ ok: true, result: await syncBolt(env, await bodyJson(request)) });
+  }
+  if (path === '/api/sync/uber' && request.method === 'POST') {
+    return json({ ok: true, result: await syncUber(env, await bodyJson(request)) });
+  }
+  if (path === '/api/sync/all' && request.method === 'POST') {
+    const input = await bodyJson(request);
+    const result = {};
+    if (env.BOLT_CLIENT_ID && env.BOLT_CLIENT_SECRET) result.bolt = await syncBolt(env, input.bolt || {});
+    if (env.UBER_CLIENT_ID && env.UBER_CLIENT_SECRET) result.uber = await syncUber(env, input.uber || {});
+    return json({ ok: true, result });
+  }
+
+  if (path === '/api/settlement-rules' && request.method === 'GET') {
+    return json({ ok: true, rules: await listSettlementRules(env.DB) });
+  }
+  if (path === '/api/settlement-rules' && request.method === 'POST') {
+    return json({ ok: true, rule: await upsertSettlementRule(env.DB, await bodyJson(request)) });
+  }
+  if (path === '/api/settlement-adjustments' && request.method === 'POST') {
+    return json({ ok: true, adjustment: await addSettlementAdjustment(env.DB, await bodyJson(request)) });
+  }
+  if (path === '/api/settlements/calculate' && request.method === 'POST') {
+    const input = await bodyJson(request);
+    const weekStart = input.weekStart || previousMonday();
+    return json({ ok: true, weekStart, settlements: await calculateSettlements(env.DB, weekStart) });
+  }
+  if (path === '/api/settlements' && request.method === 'GET') {
+    const weekStart = url.searchParams.get('week_start') || previousMonday();
+    return json({ ok: true, weekStart, settlements: await listSettlements(env.DB, weekStart) });
+  }
+
+  throw new HttpError(404, 'NOT_FOUND', 'Endpoint não encontrado.');
 }
 
-function withSecurityHeaders(response) {
-  const headers = new Headers(response.headers);
-  headers.set('X-Content-Type-Options', 'nosniff');
-  headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
-  headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
-  headers.set('X-Frame-Options', 'DENY');
-  headers.set(
-    'Content-Security-Policy',
-    "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
-  );
-  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+async function scheduledSync(env, controller) {
+  requireDb(env);
+  if (controller.cron === '30 5 * * MON') {
+    const weekStart = previousMonday(new Date(controller.scheduledTime));
+    return { type: 'weekly_settlements', weekStart, result: await calculateSettlements(env.DB, weekStart) };
+  }
+  const result = {};
+  if (env.BOLT_CLIENT_ID && env.BOLT_CLIENT_SECRET) result.bolt = await syncBolt(env, { syncType: 'scheduled' });
+  if (env.UBER_CLIENT_ID && env.UBER_CLIENT_SECRET) result.uber = await syncUber(env, { syncType: 'scheduled' });
+  return { type: 'platform_sync', result };
 }
 
 export default {
   async fetch(request, env) {
-    const requestId = crypto.randomUUID();
-    const url = new URL(request.url);
-
-    if (!url.pathname.startsWith('/api/')) {
-      return withSecurityHeaders(await env.ASSETS.fetch(request));
-    }
-
     try {
-      assertSameOrigin(request);
-
-      if (url.pathname === '/api/health') {
-        return jsonResponse({
-          ok: true,
-          service: 'tvde-gest',
-          bolt_credentials_configured: Boolean(env.BOLT_CLIENT_ID && env.BOLT_CLIENT_SECRET),
-          request_id: requestId,
-        });
-      }
-
-      validateEnvironment(env);
-
-      if (url.pathname === '/api/test-connection') {
-        if (request.method !== 'GET') {
-          throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Este endpoint aceita apenas GET.');
-        }
-        await getAccessToken(env);
-        return jsonResponse({
-          ok: true,
-          service: 'tvde-gest',
-          message: 'Autenticação com a Bolt estabelecida com sucesso.',
-          request_id: requestId,
-        });
-      }
-
-      const route = ROUTES[url.pathname];
-      if (!route) throw new HttpError(404, 'NOT_FOUND', 'Endpoint não encontrado.');
-      if (request.method !== route.method) {
-        throw new HttpError(405, 'METHOD_NOT_ALLOWED', `Este endpoint aceita apenas ${route.method}.`);
-      }
-
-      let body = null;
-      if (route.method === 'POST') {
-        const rawBody = await readJsonBody(request);
-        body = route.validator(rawBody);
-      }
-
-      const data = await callBolt(route.upstream, body, env);
-      return jsonResponse(data, 200, { 'X-Request-Id': requestId });
+      const url = new URL(request.url);
+      if (url.pathname.startsWith('/api/')) return await handleApi(request, env);
+      return env.ASSETS.fetch(request);
     } catch (error) {
-      const isHttpError = error instanceof HttpError;
-      const status = isHttpError ? error.status : 500;
-      const payload = {
-        ok: false,
-        error: {
-          code: isHttpError ? error.code : 'INTERNAL_ERROR',
-          message: isHttpError ? error.message : 'Erro interno na integração Bolt.',
-          ...(isHttpError && error.details ? { details: error.details } : {}),
-        },
-        request_id: requestId,
-      };
-      if (!isHttpError) console.error('Unhandled error', requestId, error);
-      return jsonResponse(payload, status, { 'X-Request-Id': requestId });
+      console.error(error);
+      return json({ ok: false, code: error.code || 'INTERNAL_ERROR', error: error.message || 'Erro interno.' }, error.status || 500);
     }
+  },
+
+  async scheduled(controller, env, ctx) {
+    ctx.waitUntil(scheduledSync(env, controller).then((result) => console.log('Scheduled OK', result)).catch((error) => console.error('Scheduled error', error)));
   },
 };
