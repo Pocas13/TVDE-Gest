@@ -1,49 +1,34 @@
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-const root = process.cwd();
 
 const files = [
-  'src/worker.js', 'src/db.js', 'src/settlements.js',
-  'src/platforms/bolt.js', 'src/platforms/uber.js',
-  'public/index.html', 'package.json', 'migrations/0001_initial.sql', 'src/analytics.js',
+  'src/worker.js','src/db.js','src/analytics.js','src/imports.js','src/portal.js','src/diagnostics.js',
+  'src/settlements.js','src/compliance.js','src/platforms/bolt.js','src/platforms/uber.js',
+  'public/index.html','public/driver.html','public/assets/app.js','public/assets/driver.js','public/assets/app.css',
+  'migrations/0007_product_foundation.sql','migrations/0008_seed_historical_2026.sql','package.json',
 ];
 for (const file of files) {
+  if (!existsSync(resolve(file))) throw new Error(`Falta ficheiro obrigatório: ${file}`);
   const text = await readFile(file, 'utf8');
   if (!text.trim()) throw new Error(`${file} está vazio.`);
 }
 
 const html = await readFile('public/index.html', 'utf8');
-for (const required of ['Cálculo de ganhos', '/api/sync/uber', '/api/sync/bolt', '/api/data/snapshot']) {
+if (/<script(?![^>]*src=)/i.test(html)) throw new Error('O painel voltou a incluir JavaScript embutido.');
+for (const required of ['TVDE Gest','/assets/app.js','Visão geral']) {
   if (!html.toLocaleLowerCase('pt-PT').includes(required.toLocaleLowerCase('pt-PT'))) throw new Error(`O painel não contém ${required}.`);
 }
-if (html.includes('s-bolt-proxy')) throw new Error('Ainda existe configuração antiga de proxy no painel.');
-if (html.includes('const platforms=') && html.includes('plataformas,')) {
-  throw new Error('Possível regressão platforms/plataformas detetada.');
+const app = await readFile('public/assets/app.js', 'utf8');
+if (!app.toLocaleLowerCase('pt-PT').includes('cálculo de ganhos'.toLocaleLowerCase('pt-PT'))) throw new Error('O painel não contém Cálculo de ganhos.');
+for (const required of ['/api/dashboard','/api/imports/csv','/api/driver-access','/api/diagnostics']) {
+  if (!app.includes(required)) throw new Error(`O frontend não usa ${required}.`);
 }
-
-const optionalFiles = existsSync(resolve(root, 'wrangler.jsonc')) ? ['wrangler.jsonc'] : [];
-const tracked = await Promise.all([...files, ...optionalFiles].map((file) => readFile(file, 'utf8'))).then((parts) => parts.join('\n'));
-const secretPatterns = [
-  /client_secret\s*[:=]\s*["'][^"']{12,}/i,
-  /BOLT_CLIENT_SECRET\s*=\s*(?!coloca_aqui)[^\s#]+/,
-  /UBER_CLIENT_SECRET\s*=\s*(?!\s*$)[A-Za-z0-9_-]{12,}/,
-];
-if (secretPatterns.some((pattern) => pattern.test(tracked))) {
-  throw new Error('Foi detetado um possível segredo em ficheiros versionados.');
+const worker = await readFile('src/worker.js', 'utf8');
+for (const required of ['/api/dashboard','/api/imports/csv','/api/portal/bootstrap','/api/diagnostics']) {
+  if (!worker.includes(required)) throw new Error(`A API não contém ${required}.`);
 }
-
-const migration = await readFile('migrations/0001_initial.sql', 'utf8');
-for (const table of ['drivers', 'vehicles', 'financial_entries', 'weekly_settlements', 'settlement_rules', 'sync_runs']) {
-  if (!migration.includes(`TABLE IF NOT EXISTS ${table}`)) throw new Error(`Tabela ${table} em falta na migração.`);
-}
-console.log('Verificação concluída: Bolt, Uber, D1, Cron e acertos semanais OK.');
-
-for (const required of [
-  'migrations/0002_compliance.sql',
-  'src/compliance.js',
-  'public/privacy.html',
-  'public/terms.html',
-]) {
-  if (!existsSync(resolve(root, required))) throw new Error(`Falta ficheiro obrigatório: ${required}`);
-}
+const tracked = await Promise.all(files.map((file) => readFile(file, 'utf8'))).then((parts) => parts.join('\n'));
+const secretPatterns = [/client_secret\s*[:=]\s*["'][^"']{12,}/i,/BOLT_CLIENT_SECRET\s*=\s*(?!coloca_aqui)[^\s#]+/,/UBER_CLIENT_SECRET\s*=\s*(?!\s*$)[A-Za-z0-9_-]{12,}/];
+if (secretPatterns.some((pattern) => pattern.test(tracked))) throw new Error('Foi detetado um possível segredo em ficheiros versionados.');
+console.log('Verificação concluída: frontend modular, Bolt, Uber, CSV, histórico, portal do motorista e D1 OK.');

@@ -1,32 +1,25 @@
 # TVDE Gest
 
-Aplicação interna para gestão da frota TVDE de Daniel SC Mediação de Seguros e Serviços, Lda.
+Cockpit de gestão de frotas TVDE em Cloudflare Workers + D1.
 
-## Módulos
-- Espelho geral Bolt/Uber com rastreabilidade da origem
-- Motoristas e viaturas
-- Sincronizações
-- Acertos semanais
-- Análise individual semanal, trimestral e anual
-- Pagamentos e saldos
-- Auditoria e privacidade
-
-## Fórmula dos acertos
-
-`(viagens Uber + Bolt) / 1,06 + gorjetas + portagens - aluguer/slot/4% - pagamentos já efetuados = saldo`
-
-## Atualizar
-
-Extrair o ZIP para uma pasta temporária e executar `ATUALIZAR.ps1`. O atualizador preserva `wrangler.jsonc`, `.dev.vars`, `.git` e `.wrangler`.
-
-## Publicar
+## Executar
 
 ```powershell
-Set-Location "D:\TVDE Gest"
-.\PUBLICAR.ps1
+npm run dev
 ```
 
+Abrir o endereço indicado pelo Wrangler, normalmente `http://127.0.0.1:8787` ou `http://127.0.0.1:8788`.
 
-## Arquivo histórico Bolt
+## Validar e publicar
 
-O TVDE Gest consulta `getFleetOrders` com `time_range_filter_type: price_review`, pagina até 1000 registos e guarda cada ordem usando `order_reference` como chave única. A importação histórica é dividida em blocos semanais e retomada automaticamente pelo cron, evitando os limites de pedidos da Bolt e da Cloudflare.
+```powershell
+PowerShell -ExecutionPolicy Bypass -File ".\SINCRONIZAR.ps1"
+```
+
+## Dados já incluídos
+
+- Bolt agregado: 30/12/2025 a 31/05/2026.
+- Bolt agregado: 01/06/2026 a 19/07/2026.
+- Uber atividade: 15/06/2026 a 13/07/2026.
+
+Os dados agregados não são distribuídos artificialmente por dia ou semana. A API detalhada Bolt passa a ser usada após o corte configurado.

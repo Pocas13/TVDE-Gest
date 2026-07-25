@@ -43,9 +43,9 @@ export async function setSetting(db, key, value) {
 export async function upsertDriver(db, input) {
   const platform = input.platform;
   const externalId = input.externalDriverId || null;
-  let driverId = null;
+  let driverId = input.driverId || null;
 
-  if (externalId) {
+  if (!driverId && externalId) {
     const account = await db.prepare(
       'SELECT driver_id FROM driver_platform_accounts WHERE platform = ? AND external_driver_id = ?'
     ).bind(platform, externalId).first();

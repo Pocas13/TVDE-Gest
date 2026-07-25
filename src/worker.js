@@ -12,6 +12,9 @@ import {
   settlementAnalysis, activateAllSettlementRules,
 } from './settlements.js';
 import { audit, deletePlatformData, listAuditLogs, listConsents, retentionCleanup, upsertConsent } from './compliance.js';
+import { diagnostics } from './diagnostics.js';
+import { importCsv, listImports } from './imports.js';
+import { createDriverPortalLink, portalBootstrap, revokeDriverPortalLinks } from './portal.js';
 
 class HttpError extends Error {
   constructor(status, code, message) {
@@ -132,7 +135,8 @@ async function handleApi(request, env) {
   const url = new URL(request.url);
   const path = url.pathname;
   const isUberWebhook = path === '/api/webhooks/uber';
-  if (!isUberWebhook) {
+  const isPublicPortal = path === '/api/portal/bootstrap';
+  if (!isUberWebhook && !isPublicPortal) {
     assertAccess(request, env);
     assertSameOrigin(request);
   }
@@ -165,6 +169,19 @@ async function handleApi(request, env) {
     return json({ ok: true, app: 'TVDE Gest', d1: Boolean(env.DB), bolt: Boolean(env.BOLT_CLIENT_ID && env.BOLT_CLIENT_SECRET), uber: Boolean(env.UBER_CLIENT_ID && env.UBER_CLIENT_SECRET) });
   }
 
+  if (path === '/api/diagnostics' && request.method === 'GET') {
+    return json(await diagnostics(env));
+  }
+  if (path === '/api/portal/bootstrap' && request.method === 'GET') {
+    requireDb(env);
+    return json({ ok: true, ...(await portalBootstrap(
+      env.DB,
+      url.searchParams.get('token'),
+      url.searchParams.get('period') || 'year',
+      url.searchParams.get('reference_date') || undefined,
+    )) });
+  }
+
   if (path === '/api/companies' || path === '/api/getCompanies') {
     return json(await boltRequest(env, 'getCompanies'));
   }
@@ -180,6 +197,23 @@ async function handleApi(request, env) {
   }
 
   requireDb(env);
+
+  if (path === '/api/imports' && request.method === 'GET') {
+    return json({ ok: true, imports: await listImports(env.DB, url.searchParams.get('limit')) });
+  }
+  if (path === '/api/imports/csv' && request.method === 'POST') {
+    const result = await importCsv(env, await bodyJson(request));
+    await audit(env.DB, { actorEmail: request.headers.get('CF-Access-Authenticated-User-Email'), action: 'csv.imported', resourceType: 'import', resourceId: result.batchId, platform: result.detectedType.startsWith('bolt') ? 'Bolt' : 'Uber', details: result });
+    return json({ ok: true, result });
+  }
+  if (path === '/api/driver-access' && request.method === 'POST') {
+    const input = await bodyJson(request);
+    return json({ ok: true, access: await createDriverPortalLink(env.DB, input.driverId, url.origin, input.days || 30) });
+  }
+  if (path === '/api/driver-access/revoke' && request.method === 'POST') {
+    const input = await bodyJson(request);
+    return json({ ok: true, result: await revokeDriverPortalLinks(env.DB, input.driverId) });
+  }
 
   if (path === '/api/data/snapshot' && request.method === 'GET') {
     return json({ ok: true, ...legacySnapshot(await snapshot(env.DB)) });
@@ -297,10 +331,12 @@ async function handleApi(request, env) {
     const weekStart = url.searchParams.get('week_start') || previousMonday();
     return json({ ok: true, weekStart, settlements: await listSettlements(env.DB, weekStart) });
   }
-  if (path === '/api/analytics/fleet' && request.method === 'GET') {
+  if (['/api/analytics/fleet','/api/dashboard','/api/overview'].includes(path) && request.method === 'GET') {
     return json({ ok: true, mirror: await fleetMirror(env.DB, {
       period: url.searchParams.get('period') || 'this_week',
       referenceDate: url.searchParams.get('reference_date') || undefined,
+      startDate: url.searchParams.get('start_date') || undefined,
+      endDate: url.searchParams.get('end_date') || undefined,
     }) });
   }
   if (path === '/api/analytics/driver' && request.method === 'GET') {
@@ -308,6 +344,8 @@ async function handleApi(request, env) {
       driverId: url.searchParams.get('driver_id'),
       period: url.searchParams.get('period') || 'year',
       referenceDate: url.searchParams.get('reference_date') || undefined,
+      startDate: url.searchParams.get('start_date') || undefined,
+      endDate: url.searchParams.get('end_date') || undefined,
     }) });
   }
 

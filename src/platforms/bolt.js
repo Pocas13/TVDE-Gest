@@ -63,7 +63,15 @@ export async function boltRequest(env, path, { method = 'GET', body = null } = {
   try { data = text ? JSON.parse(text) : {}; } catch { data = { message: text }; }
   if (!response.ok || (data.code != null && Number(data.code) !== 0)) {
     const message = data.message || data.error || `Pedido Bolt falhou (${response.status}).`;
-    throw new Error(`${message}${data.code ? ` [Bolt ${data.code}]` : ''}`);
+    const error = new Error(`${message}${data.code ? ` [Bolt ${data.code}]` : ''}`);
+    error.status = response.status;
+    error.boltCode = data.code == null ? null : Number(data.code);
+    const retryAfter = Number(response.headers.get('Retry-After') || 0);
+    if (response.status === 429 || Number(data.code) === 1005 || /too many/i.test(message)) {
+      error.retryable = true;
+      error.retryAfterSeconds = retryAfter > 0 ? retryAfter : 900;
+    }
+    throw error;
   }
   return data;
 }
@@ -245,6 +253,9 @@ export async function syncBolt(env, options = {}) {
     const orderRange = options.startTs && options.endTs
       ? { startTs: Number(options.startTs), endTs: Number(options.endTs) }
       : rangeSeconds(orderDays);
+    if (orderRange.endTs - orderRange.startTs > 14 * 86400) {
+      throw new Error('A sincronização direta Bolt aceita no máximo 14 dias. Para períodos maiores usa o Arquivo histórico, que processa uma semana por execução.');
+    }
     const entityRange = options.startTs && options.endTs
       ? { startTs: Number(options.startTs), endTs: Number(options.endTs) }
       : rangeSeconds(entityDays);
@@ -316,7 +327,8 @@ export async function processBoltHistoryJob(env, id = null) {
   if (job.status === 'completed') return job;
   const chunkStart = job.next_start_date;
   const chunkEnd = [addIsoDays(chunkStart, Number(job.chunk_days) - 1), job.end_date].sort()[0];
-  await env.DB.prepare("UPDATE bolt_history_jobs SET status='running',last_error=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(job.id).run();
+  if (job.next_retry_at && new Date(job.next_retry_at).getTime() > Date.now()) return job;
+  await env.DB.prepare("UPDATE bolt_history_jobs SET status='running',last_error=NULL,attempts=attempts+1,updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(job.id).run();
   try {
     // Um bloco por execução: evita limites da Bolt e de subpedidos do Worker.
     const startTs = dateToUnixStart(chunkStart);
@@ -327,15 +339,16 @@ export async function processBoltHistoryJob(env, id = null) {
     await env.DB.prepare(`UPDATE bolt_history_jobs SET
       next_start_date=?,status=?,completed_chunks=completed_chunks+1,
       records_received=records_received+?,records_created=records_created+?,records_updated=records_updated+?,
-      updated_at=CURRENT_TIMESTAMP,finished_at=? WHERE id=?`).bind(
+      updated_at=CURRENT_TIMESTAMP,finished_at=?,next_retry_at=NULL WHERE id=?`).bind(
         next, done ? 'completed' : 'pending', orders.received, orders.created, orders.updated,
         done ? new Date().toISOString() : null, job.id,
       ).run();
     return getBoltHistoryJob(env.DB, job.id);
   } catch (error) {
-    const retryable = /TOO_MANY_REQUESTS|too many|429|1005/i.test(String(error.message || error));
-    await env.DB.prepare("UPDATE bolt_history_jobs SET status=?,last_error=?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
-      .bind(retryable ? 'paused' : 'error', String(error.message || error), job.id).run();
+    const retryable = Boolean(error.retryable) || /TOO_MANY_REQUESTS|too many|429|1005/i.test(String(error.message || error));
+    const retryAt = retryable ? new Date(Date.now() + Number(error.retryAfterSeconds || 900) * 1000).toISOString() : null;
+    await env.DB.prepare("UPDATE bolt_history_jobs SET status=?,last_error=?,next_retry_at=?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
+      .bind(retryable ? 'paused' : 'error', String(error.message || error), retryAt, job.id).run();
     throw error;
   }
 }
@@ -343,6 +356,6 @@ export async function processBoltHistoryJob(env, id = null) {
 export async function resumeBoltHistoryJob(env, id = null) {
   const job = await getBoltHistoryJob(env.DB, id);
   if (!job) throw new Error('Não existe uma importação histórica Bolt.');
-  await env.DB.prepare("UPDATE bolt_history_jobs SET status='pending',last_error=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(job.id).run();
+  await env.DB.prepare("UPDATE bolt_history_jobs SET status='pending',last_error=NULL,next_retry_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(job.id).run();
   return processBoltHistoryJob(env, job.id);
 }

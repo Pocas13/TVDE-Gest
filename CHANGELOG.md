@@ -1,18 +1,17 @@
-# Changelog
+# TVDE Gest
 
-## 1.4.0
-- Integração Bolt alinhada com `getFleetOrders` e filtro `PRICE_REVIEW`.
-- Importação histórica retomável em blocos de 7 dias.
-- Progresso persistido na D1; proteção contra duplicados por `order_reference`.
-- Motoristas e viaturas Bolt filtrados por estado ativo.
-- Token OAuth2 Bolt reutilizado e renovado antes de expirar.
-- Interface para criar, processar e acompanhar o arquivo histórico.
-- Preparação para dados agregados importados por CSV quando a API não disponibilizar detalhe histórico.
+## Atualização principal
 
-# Changelog
-
-## 1.3.0
-- Cálculo Bolt baseado em Ganhos líquidos.
-- Gorjetas e portagens retiradas antes do IVA e acrescentadas novamente depois.
-- Campanhas, reembolsos, cancelamentos e taxas de reserva separados.
-- Visão geral redesenhada para ocupar toda a largura.
+- Frontend totalmente modular, sem JavaScript embutido no HTML.
+- Novo cockpit operacional de largura total.
+- Dashboard nunca fica em branco: erros e estados vazios são apresentados.
+- Histórico Bolt agregado de 30/12/2025 a 19/07/2026 carregado na D1.
+- Atividade Uber real de 15/06/2026 a 13/07/2026 carregada na D1.
+- Importação de CSV Bolt e Uber diretamente no painel.
+- Fórmula Bolt corrigida: ganhos líquidos menos gorjetas e portagens, divisão por 1,06, reposição de gorjetas e portagens.
+- Intervalos: esta semana, anterior, quatro semanas, trimestre, ano e datas personalizadas.
+- Arquivo Bolt por blocos semanais com retoma após rate limit.
+- Diagnóstico de Worker, Assets, D1, credenciais e volume de dados.
+- Área privada do motorista por ligação expirável e revogável.
+- Fundação multiempresa: organizações, utilizadores, membros e tenant_id.
+- Páginas de motoristas, viaturas, ganhos, cálculos, importações, integrações e produto SaaS.
