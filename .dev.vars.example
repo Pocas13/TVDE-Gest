@@ -17,3 +17,6 @@ BOLT_ENTITY_LOOKBACK_DAYS=30
 
 # Ativa depois de configurares Cloudflare Access
 REQUIRE_CF_ACCESS=false
+
+# Deve ser igual à Signing Key introduzida no webhook da Uber
+UBER_WEBHOOK_SIGNING_KEY=

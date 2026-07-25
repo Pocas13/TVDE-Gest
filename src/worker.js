@@ -1,3 +1,4 @@
+import { fleetMirror, driverMirror } from './analytics.js';
 /**
  * TVDE Gest — Cloudflare Worker, D1, Bolt e Uber.
  * Protege o domínio com Cloudflare Access em produção.
@@ -7,7 +8,8 @@ import { boltRequest, getBoltCompanyIds, syncBolt } from './platforms/bolt.js';
 import { getUberOrganizations, syncUber } from './platforms/uber.js';
 import {
   addSettlementAdjustment, calculateSettlements, listSettlementRules,
-  listSettlements, previousMonday, upsertSettlementRule,
+  listSettlements, previousMonday, upsertSettlementRule, upsertWeekOverride,
+  settlementAnalysis, activateAllSettlementRules,
 } from './settlements.js';
 import { audit, deletePlatformData, listAuditLogs, listConsents, retentionCleanup, upsertConsent } from './compliance.js';
 
@@ -140,8 +142,9 @@ async function handleApi(request, env) {
     requireDb(env);
     const raw = await request.text();
     const provided = request.headers.get('X-Uber-Signature') || '';
-    if (!env.UBER_CLIENT_SECRET) throw new HttpError(503, 'UBER_NOT_CONFIGURED', 'Segredo Uber não configurado.');
-    const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(env.UBER_CLIENT_SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    const webhookSigningKey = env.UBER_WEBHOOK_SIGNING_KEY || env.UBER_CLIENT_SECRET;
+    if (!webhookSigningKey) throw new HttpError(503, 'UBER_WEBHOOK_NOT_CONFIGURED', 'Signing Key do webhook Uber não configurada.');
+    const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(webhookSigningKey), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
     const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(raw));
     const expected = [...new Uint8Array(signature)].map((b) => b.toString(16).padStart(2, '0')).join('');
     if (!provided || provided.toLowerCase() !== expected.toLowerCase()) {
@@ -256,26 +259,50 @@ async function handleApi(request, env) {
   if (path === '/api/settlement-rules' && request.method === 'POST') {
     return json({ ok: true, rule: await upsertSettlementRule(env.DB, await bodyJson(request)) });
   }
+  if (path === '/api/settlement-rules/activate-all' && request.method === 'POST') {
+    return json({ ok: true, result: await activateAllSettlementRules(env.DB) });
+  }
   if (path === '/api/settlement-adjustments' && request.method === 'POST') {
     return json({ ok: true, adjustment: await addSettlementAdjustment(env.DB, await bodyJson(request)) });
+  }
+  if (path === '/api/settlement-week-override' && request.method === 'POST') {
+    return json({ ok: true, result: await upsertWeekOverride(env.DB, await bodyJson(request)) });
   }
   if (path === '/api/settlements/calculate' && request.method === 'POST') {
     const input = await bodyJson(request);
     const combinedAuthorized = (await getSetting(env.DB, 'uber_combined_processing_authorized', 'false')) === 'true';
-    if (!combinedAuthorized) {
-      const rules = await listSettlementRules(env.DB);
-      if (rules.some((rule) => Number(rule.active) === 1 && Number(rule.include_bolt) === 1 && Number(rule.include_uber) === 1)) {
-        throw new HttpError(409, 'UBER_COMBINED_PROCESSING_NOT_AUTHORIZED', 'Os acertos combinados Uber/Bolt estão bloqueados até existir autorização escrita da Uber.');
-      }
-    }
     const weekStart = input.weekStart || previousMonday();
-    const result = await calculateSettlements(env.DB, weekStart);
+    // Enquanto não existir autorização escrita da Uber, o cálculo continua disponível
+    // exclusivamente com dados Bolt. Nenhum dado Uber é incluído ou combinado.
+    const platformMode = combinedAuthorized ? 'CONFIGURED' : 'BOLT_ONLY';
+    const result = await calculateSettlements(env.DB, weekStart, { platformMode });
     await audit(env.DB, { actorEmail: request.headers.get('CF-Access-Authenticated-User-Email'), action: 'settlements.calculated', resourceType: 'week', resourceId: weekStart });
-    return json({ ok: true, weekStart, settlements: result });
+    return json({ ok: true, weekStart, platformMode, settlements: result });
   }
   if (path === '/api/settlements' && request.method === 'GET') {
     const weekStart = url.searchParams.get('week_start') || previousMonday();
     return json({ ok: true, weekStart, settlements: await listSettlements(env.DB, weekStart) });
+  }
+  if (path === '/api/analytics/fleet' && request.method === 'GET') {
+    return json({ ok: true, mirror: await fleetMirror(env.DB, {
+      period: url.searchParams.get('period') || 'month',
+      referenceDate: url.searchParams.get('reference_date') || undefined,
+    }) });
+  }
+  if (path === '/api/analytics/driver' && request.method === 'GET') {
+    return json({ ok: true, mirror: await driverMirror(env.DB, {
+      driverId: url.searchParams.get('driver_id'),
+      period: url.searchParams.get('period') || 'year',
+      referenceDate: url.searchParams.get('reference_date') || undefined,
+    }) });
+  }
+
+  if (path === '/api/settlement-analysis' && request.method === 'GET') {
+    return json({ ok: true, analysis: await settlementAnalysis(env.DB, {
+      driverId: url.searchParams.get('driver_id'),
+      period: url.searchParams.get('period') || 'weekly',
+      referenceDate: url.searchParams.get('reference_date') || previousMonday(),
+    }) });
   }
 
   throw new HttpError(404, 'NOT_FOUND', 'Endpoint não encontrado.');

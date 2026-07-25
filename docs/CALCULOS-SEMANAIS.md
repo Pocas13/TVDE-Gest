@@ -1,66 +1,29 @@
-# Acertos semanais no TVDE Gest
+# Cálculos semanais — TVDE Gest v0.7.2
 
-## Semana
+## Fórmula oficial usada pela aplicação
 
-A semana vai de segunda-feira a domingo. O acerto automático é recalculado na segunda-feira seguinte.
+1. Somar as viagens Uber e Bolt.
+2. Retirar o IVA incluído: `total de viagens / 1,06`.
+3. Somar as gorjetas Uber e Bolt.
+4. Somar as portagens Uber e Bolt.
+5. Aplicar a regra do motorista sobre esta base semanal:
+   - aluguer fixo de 225 € ou 250 €;
+   - slot fixo de 25 €;
+   - comissão percentual, como 4% no caso do Marcelo.
+6. Obter o valor a pagar ao motorista.
+7. Subtrair pagamentos já efetuados.
+8. Apresentar o saldo pendente.
 
-## Valores importados
+## Exemplo
 
-O cálculo usa o campo líquido normalizado de cada plataforma:
+- Viagens: 1.000 €
+- Viagens sem IVA: 1.000 / 1,06 = 943,40 €
+- Gorjetas: 10 €
+- Portagens: 10 €
+- Base semanal: 963,40 €
 
-- Bolt: `order_price.net_earnings`.
-- Uber: categoria financeira `paid_to_you`, `payout`, `net_earnings` ou, quando indisponível, `your_earnings`.
+Com aluguer de 250 €: `963,40 - 250 = 713,40 €`.
 
-A estrutura financeira Uber pode variar por país e tipo de movimento. Antes de usar os primeiros acertos reais, compara uma semana com o extrato oficial da Uber.
+Com comissão de 4%: `963,40 × 4% = 38,54 €`; motorista recebe `924,86 €`.
 
-## Modelos
-
-### RENT_ONLY — Apenas aluguer
-
-Adequado quando o motorista recebe diretamente os rendimentos das plataformas e paga à empresa apenas o aluguer/encargos.
-
-```text
-base = - aluguer - taxa fixa + créditos - débitos
-```
-
-### FLEET_PAYOUT — Frota paga motorista
-
-Adequado quando a empresa recebe os valores das plataformas e depois paga ao motorista.
-
-```text
-base = líquido das plataformas - aluguer - taxa fixa + créditos - débitos
-```
-
-### PERCENTAGE — Percentagem
-
-```text
-parcela_motorista = líquido das plataformas × percentagem
-base = parcela_motorista - aluguer - taxa fixa + créditos - débitos
-```
-
-## Direção do saldo
-
-- Saldo positivo: a empresa deve pagar ao motorista.
-- Saldo negativo: o motorista deve pagar à empresa.
-- Saldo zero: acerto concluído.
-
-## Ajustes
-
-- `credit`: valor a favor do motorista.
-- `debit`: valor a favor da empresa.
-- `payment`: pagamento já realizado pelo devedor, reduzindo o saldo em aberto.
-
-## Regra inicial
-
-Por segurança operacional, o sistema cria inicialmente:
-
-```text
-Modo: RENT_ONLY
-Aluguer semanal: 250,00 €
-Percentagem motorista: 100%
-Taxa fixa: 0,00 €
-Bolt: incluída
-Uber: incluída
-```
-
-Esta regra fica **desativada por defeito**. Confirma os valores e ativa-a individualmente para cada motorista antes de calcular acertos reais.
+A comissão percentual incide sobre a base semanal completa: viagens sem IVA + gorjetas + portagens.

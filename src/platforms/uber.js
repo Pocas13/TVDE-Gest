@@ -15,13 +15,12 @@ function required(env, name) {
   return value;
 }
 
-function defaultScopes() {
-  return [
-    'vehicle_suppliers.organizations.read',
-    'solutions.suppliers.metrics.read',
-    'solutions.suppliers.drivers.status.read',
-    'supplier.partner.payments',
-  ].join(' ');
+function requestedScopes(env) {
+  const scopes = String(env.UBER_SCOPES || '').trim();
+  if (!scopes) {
+    throw new Error('A Uber ainda não aprovou scopes para o TVDE Gest. Define UBER_SCOPES apenas depois de os scopes aparecerem como Granted no Developer Dashboard.');
+  }
+  return scopes;
 }
 
 async function uberToken(env, force = false) {
@@ -31,7 +30,7 @@ async function uberToken(env, force = false) {
     client_id: required(env, 'UBER_CLIENT_ID'),
     client_secret: required(env, 'UBER_CLIENT_SECRET'),
     grant_type: 'client_credentials',
-    scope: env.UBER_SCOPES || defaultScopes(),
+    scope: requestedScopes(env),
   });
   const response = await fetch(TOKEN_URL, {
     method: 'POST',
@@ -39,7 +38,13 @@ async function uberToken(env, force = false) {
     body,
     signal: AbortSignal.timeout(25000),
   });
-  if (!response.ok) throw new Error(`Autenticação Uber falhou (${response.status}): ${await response.text()}`);
+  if (!response.ok) {
+    const detail = await response.text();
+    if (response.status === 400 && detail.includes('invalid_scope')) {
+      throw new Error('Scopes Uber ainda não aprovados ou não selecionados. Pede à Uber os scopes Fleet Supplier e, depois de Granted, copia exatamente os nomes para UBER_SCOPES.');
+    }
+    throw new Error(`Autenticação Uber falhou (${response.status}): ${detail}`);
+  }
   const data = await response.json();
   cachedToken = data.access_token;
   cachedExpiry = now + Number(data.expires_in || 3600) * 1000;

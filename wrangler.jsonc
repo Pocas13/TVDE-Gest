@@ -1,29 +1,33 @@
-﻿{
-    "$schema":  "./node_modules/wrangler/config-schema.json",
-    "name":  "tvde-gest",
-    "main":  "src/worker.js",
-    "compatibility_date":  "2026-07-25",
-    "assets":  {
-                   "directory":  "./public",
-                   "binding":  "ASSETS",
-                   "run_worker_first":  true,
-                   "not_found_handling":  "single-page-application"
-               },
-    "observability":  {
-                          "enabled":  true
-                      },
-    "triggers":  {
-                     "crons":  [
-                                   "15 */2 * * *",
-                                   "30 5 * * MON"
-                               ]
-                 },
-    "d1_databases":  [
-                         {
-                             "binding":  "DB",
-                             "database_name":  "tvde-gest-db",
-                             "database_id":  "024d0fa3-1806-49a7-bf87-9fcc6c5d59cb",
-                             "migrations_dir":  "migrations"
-                         }
-                     ]
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "tvde-gest",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-07-25",
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "tvde-gest-db",
+      "database_id": "024d0fa3-1806-49a7-bf87-9fcc6c5d59cb",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": true,
+    "not_found_handling": "single-page-application"
+  },
+
+  "observability": {
+    "enabled": true
+  },
+
+  "triggers": {
+    "crons": [
+      "15 */2 * * *",
+      "30 5 * * MON"
+    ]
+  }
 }

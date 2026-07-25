@@ -1,0 +1,8 @@
+1. Copie wrangler.jsonc para D:\TVDE Gest, substituindo o atual.
+2. Copie scripts\configurar-d1.ps1 para D:\TVDE Gest\scripts.
+3. Execute:
+
+Set-Location "D:\TVDE Gest"
+PowerShell -ExecutionPolicy Bypass -File ".\scripts\configurar-d1.ps1"
+npm run check
+npm run dev

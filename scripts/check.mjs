@@ -6,7 +6,7 @@ const root = process.cwd();
 const files = [
   'src/worker.js', 'src/db.js', 'src/settlements.js',
   'src/platforms/bolt.js', 'src/platforms/uber.js',
-  'public/index.html', 'wrangler.jsonc', 'package.json', 'migrations/0001_initial.sql',
+  'public/index.html', 'package.json', 'migrations/0001_initial.sql', 'src/analytics.js',
 ];
 for (const file of files) {
   const text = await readFile(file, 'utf8');
@@ -22,7 +22,8 @@ if (html.includes('const platforms=') && html.includes('plataformas,')) {
   throw new Error('Possível regressão platforms/plataformas detetada.');
 }
 
-const tracked = await Promise.all(files.map((file) => readFile(file, 'utf8'))).then((parts) => parts.join('\n'));
+const optionalFiles = existsSync(resolve(root, 'wrangler.jsonc')) ? ['wrangler.jsonc'] : [];
+const tracked = await Promise.all([...files, ...optionalFiles].map((file) => readFile(file, 'utf8'))).then((parts) => parts.join('\n'));
 const secretPatterns = [
   /client_secret\s*[:=]\s*["'][^"']{12,}/i,
   /BOLT_CLIENT_SECRET\s*=\s*(?!coloca_aqui)[^\s#]+/,
