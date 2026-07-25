@@ -1072,11 +1072,26 @@ function renderIntegracoes(c){
       <pre id="bolt-sync-log" style="margin-top:12px;background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:12px;font-family:var(--font-mono);font-size:12px;max-height:320px;overflow:auto;white-space:pre-wrap;color:var(--text-dim);">Pronto.</pre>
     </div>
 
+    <div class="section-title">Arquivo histórico Bolt</div>
+    <div class="card" style="max-width:900px;line-height:1.65;font-size:13px;color:var(--text-dim);">
+      <div class="field-row">
+        <div class="field"><label>Início do histórico</label><input id="history-start" type="date" value="2025-12-30"></div>
+        <div class="field"><label>Fim do histórico</label><input id="history-end" type="date" value="${todayIso()}"></div>
+      </div>
+      <p>A importação é feita em blocos de 7 dias, um bloco por execução, para respeitar os limites da Bolt e da Cloudflare. Os dados ficam guardados permanentemente na D1 e não são duplicados.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn bolt" id="history-create">Criar importação histórica</button>
+        <button class="btn primary" id="history-next">Importar próximo bloco</button>
+        <button class="btn" id="history-status">Consultar progresso</button>
+      </div>
+      <pre id="history-log" style="margin-top:12px;background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:12px;font-family:var(--font-mono);font-size:12px;max-height:260px;overflow:auto;white-space:pre-wrap;color:var(--text-dim);">Ainda não foi consultado nenhum histórico.</pre>
+    </div>
+
     <div class="section-title">Sincronização automática</div>
     <div class="card" style="max-width:900px;line-height:1.65;font-size:13px;color:var(--text-dim);">
-      <b style="color:var(--text);">A cada 2 horas:</b> atualiza motoristas, viaturas e movimentos recentes da Bolt e da Uber.<br>
-      <b style="color:var(--text);">Segunda-feira às 05:30 UTC:</b> calcula automaticamente os acertos da semana anterior.<br>
-      As execuções ficam registadas na tabela <code>sync_runs</code> da base D1 e nos logs do Cloudflare Worker.
+      <b style="color:var(--text);">A cada 2 horas:</b> processa primeiro um bloco histórico pendente; quando não existe histórico pendente, atualiza os movimentos recentes.<br>
+      <b style="color:var(--text);">Segunda-feira às 05:30 UTC:</b> calcula automaticamente os ganhos da semana anterior.<br>
+      As execuções ficam registadas na D1 e nos logs do Cloudflare Worker.
     </div>
   `;
 
@@ -1131,6 +1146,44 @@ ${JSON.stringify(result.result||result,null,2)}`;
   document.getElementById('server-sync-all').addEventListener('click',()=>{
     const r=dateOptions(); runServerSync('/api/sync/all',{bolt:{companyId:Number(document.getElementById('s-bolt-company').value)||undefined,startTs:r.startTs,endTs:r.endTs},uber:{orgId:document.getElementById('s-uber-org').value||undefined,startMs:r.startMs,endMs:r.endMs}},'Bolt e Uber');
   });
+  const showHistory=job=>{
+    const el=document.getElementById('history-log');
+    if(!job){ el.textContent='Não existe qualquer importação histórica.'; return; }
+    const pct=job.total_chunks?Math.round(Number(job.completed_chunks||0)*100/Number(job.total_chunks)):0;
+    el.textContent=`Estado: ${job.status}
+Período: ${job.start_date} a ${job.end_date}
+Progresso: ${job.completed_chunks}/${job.total_chunks} blocos (${pct}%)
+Próximo bloco: ${job.next_start_date}
+Registos recebidos: ${job.records_received}
+Novos: ${job.records_created}
+Atualizados: ${job.records_updated}${job.last_error?`
+Último erro: ${job.last_error}`:''}`;
+  };
+  document.getElementById('history-create').addEventListener('click',async()=>{
+    const el=document.getElementById('history-log'); el.textContent='A criar a importação histórica…';
+    try{
+      const data=await apiFetch('/api/bolt/history',{method:'POST',body:JSON.stringify({
+        companyId:Number(document.getElementById('s-bolt-company').value)||undefined,
+        startDate:document.getElementById('history-start').value,
+        endDate:document.getElementById('history-end').value,
+        chunkDays:7,
+      })}); showHistory(data.job); toast('Importação histórica criada.');
+    }catch(error){ el.textContent='Erro: '+error.message; }
+  });
+  document.getElementById('history-next').addEventListener('click',async()=>{
+    const el=document.getElementById('history-log'); el.textContent='A importar o próximo bloco semanal…';
+    try{
+      const data=await apiFetch('/api/bolt/history/process',{method:'POST',body:'{}'}); showHistory(data.job);
+      await reloadServerData(false); toast('Bloco histórico importado.');
+    }catch(error){ el.textContent='Erro: '+error.message+'
+O progresso ficou guardado. Tenta novamente mais tarde.'; }
+  });
+  document.getElementById('history-status').addEventListener('click',async()=>{
+    const el=document.getElementById('history-log'); el.textContent='A consultar o progresso…';
+    try{ const data=await apiFetch('/api/bolt/history'); showHistory(data.job); }
+    catch(error){ el.textContent='Erro: '+error.message; }
+  });
+
   document.getElementById('reload-d1').addEventListener('click',async()=>{ await reloadServerData(true); render(); });
   document.getElementById('import-local-d1').addEventListener('click',async()=>{
     const log=document.getElementById('bolt-sync-log');

@@ -25,3 +25,8 @@ Extrair o ZIP para uma pasta temporária e executar `ATUALIZAR.ps1`. O atualizad
 Set-Location "D:\TVDE Gest"
 .\PUBLICAR.ps1
 ```
+
+
+## Arquivo histórico Bolt
+
+O TVDE Gest consulta `getFleetOrders` com `time_range_filter_type: price_review`, pagina até 1000 registos e guarda cada ordem usando `order_reference` como chave única. A importação histórica é dividida em blocos semanais e retomada automaticamente pelo cron, evitando os limites de pedidos da Bolt e da Cloudflare.

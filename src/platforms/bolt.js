@@ -133,7 +133,7 @@ function boltStatus(value) {
 }
 
 async function syncBoltDrivers(env, companyId, startTs, endTs) {
-  const rows = await pagedWindows(env, 'getDrivers', { company_id: companyId, start_ts: startTs, end_ts: endTs }, 'drivers', 1000, null, 30, (row) => row.driver_uuid || row.partner_uuid || row.phone);
+  const rows = await pagedWindows(env, 'getDrivers', { company_id: companyId, start_ts: startTs, end_ts: endTs, portal_status: 'active' }, 'drivers', 1000, null, 30, (row) => row.driver_uuid || row.partner_uuid || row.phone);
   let created = 0;
   for (const row of rows) {
     let vehicleId = null;
@@ -166,7 +166,7 @@ async function syncBoltDrivers(env, companyId, startTs, endTs) {
 }
 
 async function syncBoltVehicles(env, companyId, startTs, endTs) {
-  const rows = await pagedWindows(env, 'getVehicles', { company_id: companyId, start_ts: startTs, end_ts: endTs }, 'vehicles', 100, null, 30, (row) => String(row.id || row.uuid || row.reg_number));
+  const rows = await pagedWindows(env, 'getVehicles', { company_id: companyId, start_ts: startTs, end_ts: endTs, portal_status: 'active' }, 'vehicles', 100, null, 30, (row) => String(row.id || row.uuid || row.reg_number));
   let created = 0;
   for (const row of rows) {
     const before = await env.DB.prepare(
@@ -264,4 +264,85 @@ export async function syncBolt(env, options = {}) {
     await finishSyncRun(env.DB, runId, {}, error);
     throw error;
   }
+}
+
+
+function dateToUnixStart(date) {
+  // Meia-noite em Europe/Lisbon, incluindo mudanças entre UTC e horário de verão.
+  const utcGuess = new Date(`${date}T00:00:00Z`);
+  const part = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Europe/Lisbon', timeZoneName: 'shortOffset', hour: '2-digit', hour12: false,
+  }).formatToParts(utcGuess).find((item) => item.type === 'timeZoneName')?.value || 'GMT';
+  const match = part.match(/GMT([+-])(\d{1,2})(?::(\d{2}))?/);
+  const offsetMinutes = match ? (match[1] === '+' ? 1 : -1) * (Number(match[2]) * 60 + Number(match[3] || 0)) : 0;
+  return Math.floor((utcGuess.getTime() - offsetMinutes * 60000) / 1000);
+}
+
+function addIsoDays(date, days) {
+  const d = new Date(`${date}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function inclusiveDays(startDate, endDate) {
+  return Math.floor((new Date(`${endDate}T12:00:00Z`) - new Date(`${startDate}T12:00:00Z`)) / 86400000) + 1;
+}
+
+export async function createBoltHistoryJob(env, input = {}) {
+  if (!env.DB) throw new Error('A base de dados D1 não está ligada ao Worker com o binding DB.');
+  const companyId = Number(input.companyId || await resolveCompanyId(env));
+  const startDate = String(input.startDate || '2025-12-30');
+  const endDate = String(input.endDate || new Date().toISOString().slice(0, 10));
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate) || startDate > endDate) {
+    throw new Error('Intervalo histórico inválido.');
+  }
+  const chunkDays = Math.min(7, Math.max(1, Number(input.chunkDays || 7)));
+  const totalChunks = Math.ceil(inclusiveDays(startDate, endDate) / chunkDays);
+  const id = `bolt_hist_${crypto.randomUUID()}`;
+  await env.DB.prepare(`INSERT INTO bolt_history_jobs
+    (id,company_id,start_date,end_date,next_start_date,status,chunk_days,total_chunks)
+    VALUES (?,?,?,?,?,'pending',?,?)`).bind(id, companyId, startDate, endDate, startDate, chunkDays, totalChunks).run();
+  return getBoltHistoryJob(env.DB, id);
+}
+
+export async function getBoltHistoryJob(db, id = null) {
+  if (id) return db.prepare('SELECT * FROM bolt_history_jobs WHERE id=?').bind(id).first();
+  return db.prepare('SELECT * FROM bolt_history_jobs ORDER BY created_at DESC LIMIT 1').first();
+}
+
+export async function processBoltHistoryJob(env, id = null) {
+  const job = await getBoltHistoryJob(env.DB, id);
+  if (!job) throw new Error('Não existe uma importação histórica Bolt.');
+  if (job.status === 'completed') return job;
+  const chunkStart = job.next_start_date;
+  const chunkEnd = [addIsoDays(chunkStart, Number(job.chunk_days) - 1), job.end_date].sort()[0];
+  await env.DB.prepare("UPDATE bolt_history_jobs SET status='running',last_error=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(job.id).run();
+  try {
+    // Um bloco por execução: evita limites da Bolt e de subpedidos do Worker.
+    const startTs = dateToUnixStart(chunkStart);
+    const endTs = dateToUnixStart(addIsoDays(chunkEnd, 1));
+    const orders = await syncBoltOrders(env, Number(job.company_id), startTs, endTs);
+    const done = chunkEnd >= job.end_date;
+    const next = done ? job.end_date : addIsoDays(chunkEnd, 1);
+    await env.DB.prepare(`UPDATE bolt_history_jobs SET
+      next_start_date=?,status=?,completed_chunks=completed_chunks+1,
+      records_received=records_received+?,records_created=records_created+?,records_updated=records_updated+?,
+      updated_at=CURRENT_TIMESTAMP,finished_at=? WHERE id=?`).bind(
+        next, done ? 'completed' : 'pending', orders.received, orders.created, orders.updated,
+        done ? new Date().toISOString() : null, job.id,
+      ).run();
+    return getBoltHistoryJob(env.DB, job.id);
+  } catch (error) {
+    const retryable = /TOO_MANY_REQUESTS|too many|429|1005/i.test(String(error.message || error));
+    await env.DB.prepare("UPDATE bolt_history_jobs SET status=?,last_error=?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
+      .bind(retryable ? 'paused' : 'error', String(error.message || error), job.id).run();
+    throw error;
+  }
+}
+
+export async function resumeBoltHistoryJob(env, id = null) {
+  const job = await getBoltHistoryJob(env.DB, id);
+  if (!job) throw new Error('Não existe uma importação histórica Bolt.');
+  await env.DB.prepare("UPDATE bolt_history_jobs SET status='pending',last_error=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(job.id).run();
+  return processBoltHistoryJob(env, job.id);
 }

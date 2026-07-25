@@ -4,7 +4,7 @@ import { fleetMirror, driverMirror } from './analytics.js';
  * Protege o domínio com Cloudflare Access em produção.
  */
 import { snapshot, getSetting, setSetting, upsertDriver, upsertVehicle, upsertFinancialEntry } from './db.js';
-import { boltRequest, getBoltCompanyIds, syncBolt } from './platforms/bolt.js';
+import { boltRequest, getBoltCompanyIds, syncBolt, createBoltHistoryJob, getBoltHistoryJob, processBoltHistoryJob, resumeBoltHistoryJob } from './platforms/bolt.js';
 import { getUberOrganizations, syncUber } from './platforms/uber.js';
 import {
   addSettlementAdjustment, calculateSettlements, listSettlementRules,
@@ -208,6 +208,20 @@ async function handleApi(request, env) {
   if (path === '/api/sync/bolt' && request.method === 'POST') {
     return json({ ok: true, result: await syncBolt(env, await bodyJson(request)) });
   }
+  if (path === '/api/bolt/history' && request.method === 'GET') {
+    return json({ ok: true, job: await getBoltHistoryJob(env.DB, url.searchParams.get('id')) });
+  }
+  if (path === '/api/bolt/history' && request.method === 'POST') {
+    return json({ ok: true, job: await createBoltHistoryJob(env, await bodyJson(request)) });
+  }
+  if (path === '/api/bolt/history/process' && request.method === 'POST') {
+    const input = await bodyJson(request);
+    return json({ ok: true, job: await processBoltHistoryJob(env, input.id || null) });
+  }
+  if (path === '/api/bolt/history/resume' && request.method === 'POST') {
+    const input = await bodyJson(request);
+    return json({ ok: true, job: await resumeBoltHistoryJob(env, input.id || null) });
+  }
   if (path === '/api/sync/uber' && request.method === 'POST') {
     return json({ ok: true, result: await syncUber(env, await bodyJson(request)) });
   }
@@ -317,7 +331,15 @@ async function scheduledSync(env, controller) {
     return { type: 'weekly_settlements', weekStart, result: await calculateSettlements(env.DB, weekStart) };
   }
   const result = {};
-  if (env.BOLT_CLIENT_ID && env.BOLT_CLIENT_SECRET) result.bolt = await syncBolt(env, { syncType: 'scheduled' });
+  if (env.BOLT_CLIENT_ID && env.BOLT_CLIENT_SECRET) {
+    const historyJob = await getBoltHistoryJob(env.DB);
+    if (historyJob && ['pending','paused'].includes(historyJob.status)) {
+      try { result.boltHistory = await processBoltHistoryJob(env, historyJob.id); }
+      catch (error) { result.boltHistory = { id: historyJob.id, status: 'paused', error: String(error.message || error) }; }
+    } else {
+      result.bolt = await syncBolt(env, { syncType: 'scheduled' });
+    }
+  }
   if (env.UBER_CLIENT_ID && env.UBER_CLIENT_SECRET) result.uber = await syncUber(env, { syncType: 'scheduled' });
   return { type: 'platform_sync', result };
 }
