@@ -1,4 +1,7 @@
 import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
+const root = process.cwd();
 
 const files = [
   'src/worker.js', 'src/db.js', 'src/settlements.js',
@@ -34,3 +37,12 @@ for (const table of ['drivers', 'vehicles', 'financial_entries', 'weekly_settlem
   if (!migration.includes(`TABLE IF NOT EXISTS ${table}`)) throw new Error(`Tabela ${table} em falta na migração.`);
 }
 console.log('Verificação concluída: Bolt, Uber, D1, Cron e acertos semanais OK.');
+
+for (const required of [
+  'migrations/0002_compliance.sql',
+  'src/compliance.js',
+  'public/privacy.html',
+  'public/terms.html',
+]) {
+  if (!existsSync(resolve(root, required))) throw new Error(`Falta ficheiro obrigatório: ${required}`);
+}

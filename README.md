@@ -212,3 +212,24 @@ Mais detalhes em `docs/CALCULOS-SEMANAIS.md`.
 - Limitar o acesso ao teu e-mail ou aos administradores autorizados.
 - Rever a retenção de dados, especialmente localizações e moradas.
 - O projeto não guarda moradas de recolha/destino nem coordenadas das viagens.
+
+## Conformidade e separação das plataformas — v0.6.0
+
+O TVDE Gest apresenta Uber e Bolt em vistas separadas. A utilização simultânea nos acertos fica bloqueada enquanto a definição `uber_combined_processing_authorized` não for ativada após obtenção de autorização escrita aplicável.
+
+Depois de atualizar, aplica as migrações:
+
+```powershell
+Set-Location "D:\TVDE Gest"
+npx wrangler d1 migrations apply DB --local
+npx wrangler d1 migrations apply DB --remote
+```
+
+Antes de produção, completa os dados legais em `public/privacy.html` e `public/terms.html`, protege o Worker com Cloudflare Access e configura os secrets.
+
+### URLs Uber
+
+- Redirect OAuth: `https://SEU-DOMINIO/api/uber/oauth/callback` (a implementar quando os scopes forem aprovados)
+- Webhook: `https://SEU-DOMINIO/api/webhooks/uber`
+- Política de privacidade: `https://SEU-DOMINIO/privacy.html`
+- Termos: `https://SEU-DOMINIO/terms.html`

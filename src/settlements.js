@@ -65,7 +65,7 @@ export async function upsertSettlementRule(db, input) {
   `).bind(
     input.driverId, input.active === true ? 1 : 0, input.mode, rent, share, fee,
     input.includeBolt === false ? 0 : 1,
-    input.includeUber === false ? 0 : 1,
+    input.includeUber === true ? 1 : 0,
     input.notes || null,
   ).run();
   return db.prepare('SELECT * FROM settlement_rules WHERE driver_id = ?').bind(input.driverId).first();
@@ -197,7 +197,7 @@ export async function listSettlementRules(db) {
       COALESCE(r.driver_share_basis_points, 10000) AS driver_share_basis_points,
       COALESCE(r.operator_fee_cents, 0) AS operator_fee_cents,
       COALESCE(r.include_bolt, 1) AS include_bolt,
-      COALESCE(r.include_uber, 1) AS include_uber,
+      COALESCE(r.include_uber, 0) AS include_uber,
       r.notes
     FROM drivers d LEFT JOIN settlement_rules r ON r.driver_id = d.id
     ORDER BY d.name

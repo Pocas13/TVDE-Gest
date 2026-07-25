@@ -2,13 +2,14 @@
  * TVDE Gest — Cloudflare Worker, D1, Bolt e Uber.
  * Protege o domínio com Cloudflare Access em produção.
  */
-import { snapshot, setSetting, upsertDriver, upsertVehicle, upsertFinancialEntry } from './db.js';
+import { snapshot, getSetting, setSetting, upsertDriver, upsertVehicle, upsertFinancialEntry } from './db.js';
 import { boltRequest, getBoltCompanyIds, syncBolt } from './platforms/bolt.js';
 import { getUberOrganizations, syncUber } from './platforms/uber.js';
 import {
   addSettlementAdjustment, calculateSettlements, listSettlementRules,
   listSettlements, previousMonday, upsertSettlementRule,
 } from './settlements.js';
+import { audit, deletePlatformData, listAuditLogs, listConsents, retentionCleanup, upsertConsent } from './compliance.js';
 
 class HttpError extends Error {
   constructor(status, code, message) {
@@ -126,10 +127,36 @@ async function importLocalSnapshot(env, input) {
 }
 
 async function handleApi(request, env) {
-  assertAccess(request, env);
-  assertSameOrigin(request);
   const url = new URL(request.url);
   const path = url.pathname;
+  const isUberWebhook = path === '/api/webhooks/uber';
+  if (!isUberWebhook) {
+    assertAccess(request, env);
+    assertSameOrigin(request);
+  }
+
+
+  if (path === '/api/webhooks/uber' && request.method === 'POST') {
+    requireDb(env);
+    const raw = await request.text();
+    const provided = request.headers.get('X-Uber-Signature') || '';
+    if (!env.UBER_CLIENT_SECRET) throw new HttpError(503, 'UBER_NOT_CONFIGURED', 'Segredo Uber não configurado.');
+    const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(env.UBER_CLIENT_SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(raw));
+    const expected = [...new Uint8Array(signature)].map((b) => b.toString(16).padStart(2, '0')).join('');
+    if (!provided || provided.toLowerCase() !== expected.toLowerCase()) {
+      throw new HttpError(401, 'INVALID_UBER_SIGNATURE', 'Assinatura Uber inválida.');
+    }
+    const payload = raw ? JSON.parse(raw) : {};
+    const eventId = payload.event_id || payload.eventId || crypto.randomUUID();
+    await env.DB.prepare(`
+      INSERT INTO webhook_events (id, platform, event_type, event_time, environment, signature_valid, payload_json, processed_at)
+      VALUES (?, 'Uber', ?, ?, ?, 1, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(id) DO NOTHING
+    `).bind(eventId, payload.event_type || payload.eventType || null, payload.event_time || payload.eventTime || null,
+      request.headers.get('X-Environment') || null, JSON.stringify(payload)).run();
+    return new Response(null, { status: 200 });
+  }
 
   if (path === '/api/health') {
     return json({ ok: true, app: 'TVDE Gest', d1: Boolean(env.DB), bolt: Boolean(env.BOLT_CLIENT_ID && env.BOLT_CLIENT_SECRET), uber: Boolean(env.UBER_CLIENT_ID && env.UBER_CLIENT_SECRET) });
@@ -189,6 +216,40 @@ async function handleApi(request, env) {
     return json({ ok: true, result });
   }
 
+
+  if (path === '/api/compliance/consents' && request.method === 'GET') {
+    return json({ ok: true, consents: await listConsents(env.DB) });
+  }
+  if (path === '/api/compliance/consents' && request.method === 'POST') {
+    const input = await bodyJson(request);
+    const result = await upsertConsent(env.DB, input);
+    await audit(env.DB, { actorEmail: request.headers.get('CF-Access-Authenticated-User-Email'), action: 'consent.updated', resourceType: 'driver', resourceId: input.driverId, platform: input.platform });
+    return json({ ok: true, result });
+  }
+  if (path === '/api/compliance/audit' && request.method === 'GET') {
+    return json({ ok: true, logs: await listAuditLogs(env.DB, url.searchParams.get('limit')) });
+  }
+  if (path === '/api/compliance/delete-platform-data' && request.method === 'POST') {
+    const input = await bodyJson(request);
+    const result = await deletePlatformData(env.DB, input);
+    await audit(env.DB, { actorEmail: request.headers.get('CF-Access-Authenticated-User-Email'), action: 'platform_data.deleted', resourceType: input.driverId ? 'driver' : 'platform', resourceId: input.driverId || input.platform, platform: input.platform });
+    return json({ ok: true, result });
+  }
+  if (path === '/api/compliance/settings' && request.method === 'GET') {
+    return json({ ok: true, settings: {
+      privacyPolicyVersion: await getSetting(env.DB, 'privacy_policy_version', '2026-07-25'),
+      uberCombinedProcessingAuthorized: (await getSetting(env.DB, 'uber_combined_processing_authorized', 'false')) === 'true',
+      uberRetentionDays: Number(await getSetting(env.DB, 'uber_retention_days', '90')),
+    }});
+  }
+  if (path === '/api/compliance/settings' && request.method === 'POST') {
+    const input = await bodyJson(request);
+    if (typeof input.uberCombinedProcessingAuthorized === 'boolean') await setSetting(env.DB, 'uber_combined_processing_authorized', String(input.uberCombinedProcessingAuthorized));
+    if (input.uberRetentionDays) await setSetting(env.DB, 'uber_retention_days', String(Math.max(1, Number(input.uberRetentionDays))));
+    await audit(env.DB, { actorEmail: request.headers.get('CF-Access-Authenticated-User-Email'), action: 'compliance.settings.updated', resourceType: 'settings', details: input });
+    return json({ ok: true });
+  }
+
   if (path === '/api/settlement-rules' && request.method === 'GET') {
     return json({ ok: true, rules: await listSettlementRules(env.DB) });
   }
@@ -200,8 +261,17 @@ async function handleApi(request, env) {
   }
   if (path === '/api/settlements/calculate' && request.method === 'POST') {
     const input = await bodyJson(request);
+    const combinedAuthorized = (await getSetting(env.DB, 'uber_combined_processing_authorized', 'false')) === 'true';
+    if (!combinedAuthorized) {
+      const rules = await listSettlementRules(env.DB);
+      if (rules.some((rule) => Number(rule.active) === 1 && Number(rule.include_bolt) === 1 && Number(rule.include_uber) === 1)) {
+        throw new HttpError(409, 'UBER_COMBINED_PROCESSING_NOT_AUTHORIZED', 'Os acertos combinados Uber/Bolt estão bloqueados até existir autorização escrita da Uber.');
+      }
+    }
     const weekStart = input.weekStart || previousMonday();
-    return json({ ok: true, weekStart, settlements: await calculateSettlements(env.DB, weekStart) });
+    const result = await calculateSettlements(env.DB, weekStart);
+    await audit(env.DB, { actorEmail: request.headers.get('CF-Access-Authenticated-User-Email'), action: 'settlements.calculated', resourceType: 'week', resourceId: weekStart });
+    return json({ ok: true, weekStart, settlements: result });
   }
   if (path === '/api/settlements' && request.method === 'GET') {
     const weekStart = url.searchParams.get('week_start') || previousMonday();
@@ -213,6 +283,8 @@ async function handleApi(request, env) {
 
 async function scheduledSync(env, controller) {
   requireDb(env);
+  const retentionDays = Number(await getSetting(env.DB, 'uber_retention_days', '90'));
+  await retentionCleanup(env.DB, 'Uber', retentionDays);
   if (controller.cron === '30 5 * * MON') {
     const weekStart = previousMonday(new Date(controller.scheduledTime));
     return { type: 'weekly_settlements', weekStart, result: await calculateSettlements(env.DB, weekStart) };
