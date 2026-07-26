@@ -1,0 +1,22 @@
+# Copia para .dev.vars apenas no teu computador. Nunca publiques este ficheiro.
+
+# Bolt
+BOLT_CLIENT_ID=coloca_aqui_o_client_id
+BOLT_CLIENT_SECRET=coloca_aqui_o_client_secret
+BOLT_COMPANY_ID=
+
+# Uber — só funcionará depois da aprovação Fleet Supplier
+UBER_CLIENT_ID=
+UBER_CLIENT_SECRET=
+UBER_ORG_ID=
+UBER_SCOPES=vehicle_suppliers.organizations.read solutions.suppliers.metrics.read solutions.suppliers.drivers.status.read supplier.partner.payments
+
+# Sincronização
+SYNC_LOOKBACK_DAYS=7
+BOLT_ENTITY_LOOKBACK_DAYS=30
+
+# Ativa depois de configurares Cloudflare Access
+REQUIRE_CF_ACCESS=false
+
+# Deve ser igual à Signing Key introduzida no webhook da Uber
+UBER_WEBHOOK_SIGNING_KEY=
