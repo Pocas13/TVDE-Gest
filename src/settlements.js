@@ -94,7 +94,6 @@ export async function calculateSettlements(db, weekStart, options = {}) {
     JOIN driver_platform_accounts a ON a.driver_id=d.id
     WHERE LOWER(COALESCE(d.status,'active')) NOT IN ('inactive','disabled','deactivated','blocked')
       AND LOWER(COALESCE(a.platform_status,'active')) NOT IN ('inactive','disabled','deactivated','blocked','rejected')
-      AND LOWER(d.name) NOT LIKE 'anúbis%' AND LOWER(d.name) NOT LIKE 'anubis%'
     ORDER BY d.name
   `).all()).results || [];
   const results = [];
@@ -104,30 +103,16 @@ export async function calculateSettlements(db, weekStart, options = {}) {
     const includeBolt = Number(rule.include_bolt) === 1 ? 1 : 0;
     const includeUber = boltOnly ? 0 : (Number(rule.include_uber) === 1 ? 1 : 0);
     const totals = await db.prepare(`
-      WITH source AS (
-        SELECT platform,net_cents,gross_cents,tip_cents,toll_cents,trip_count
-        FROM aggregate_driver_periods
-        WHERE driver_id=? AND period_start>=? AND period_end<=?
-        UNION ALL
-        SELECT f.platform,f.net_cents,f.gross_cents,f.tip_cents,f.toll_cents,f.trip_count
-        FROM financial_entries f
-        WHERE f.driver_id=? AND f.service_date BETWEEN ? AND ?
-          AND NOT EXISTS (
-            SELECT 1 FROM aggregate_driver_periods a
-            WHERE a.driver_id=f.driver_id AND a.platform=f.platform
-              AND f.service_date BETWEEN a.period_start AND a.period_end
-          )
-      )
       SELECT
-        COALESCE(SUM(CASE WHEN platform='Bolt' AND ?=1 THEN MAX(0,net_cents-tip_cents-toll_cents) ELSE 0 END),0) bolt_fare,
-        COALESCE(SUM(CASE WHEN platform='Uber' AND ?=1 THEN MAX(0,net_cents-tip_cents-toll_cents) ELSE 0 END),0) uber_fare,
+        COALESCE(SUM(CASE WHEN platform='Bolt' AND ?=1 THEN CASE WHEN platform='Bolt' THEN MAX(0,net_cents-tip_cents-toll_cents) ELSE MAX(0,gross_cents-tip_cents-toll_cents) END ELSE 0 END),0) bolt_fare,
+        COALESCE(SUM(CASE WHEN platform='Uber' AND ?=1 THEN CASE WHEN platform='Bolt' THEN MAX(0,net_cents-tip_cents-toll_cents) ELSE MAX(0,gross_cents-tip_cents-toll_cents) END ELSE 0 END),0) uber_fare,
         COALESCE(SUM(CASE WHEN platform='Bolt' AND ?=1 THEN tip_cents ELSE 0 END),0) bolt_tips,
         COALESCE(SUM(CASE WHEN platform='Uber' AND ?=1 THEN tip_cents ELSE 0 END),0) uber_tips,
         COALESCE(SUM(CASE WHEN platform='Bolt' AND ?=1 THEN toll_cents ELSE 0 END),0) bolt_tolls,
         COALESCE(SUM(CASE WHEN platform='Uber' AND ?=1 THEN toll_cents ELSE 0 END),0) uber_tolls,
-        COALESCE(SUM(trip_count),0) trips
-      FROM source
-    `).bind(driver.id,weekStart,weekEnd,driver.id,weekStart,weekEnd,includeBolt,includeUber,includeBolt,includeUber,includeBolt,includeUber).first();
+        COALESCE(SUM(CASE WHEN platform IN ('Bolt','Uber') THEN trip_count ELSE 0 END),0) trips
+      FROM financial_entries WHERE driver_id=? AND service_date BETWEEN ? AND ?
+    `).bind(includeBolt,includeUber,includeBolt,includeUber,includeBolt,includeUber,driver.id,weekStart,weekEnd).first();
     const adjs = await db.prepare(`SELECT
       COALESCE(SUM(CASE WHEN type='credit' THEN amount_cents ELSE 0 END),0) credits,
       COALESCE(SUM(CASE WHEN type='debit' THEN amount_cents ELSE 0 END),0) debits,
@@ -188,7 +173,6 @@ export async function listSettlementRules(db) {
     JOIN driver_platform_accounts a ON a.driver_id=d.id
     WHERE LOWER(COALESCE(d.status,'active')) NOT IN ('inactive','disabled','deactivated','blocked')
       AND LOWER(COALESCE(a.platform_status,'active')) NOT IN ('inactive','disabled','deactivated','blocked','rejected')
-      AND LOWER(d.name) NOT LIKE 'anúbis%' AND LOWER(d.name) NOT LIKE 'anubis%'
   `).all()).results || [];
   for (const driver of drivers) await ensureDefaultRule(db, driver.id);
   const r=await db.prepare(`SELECT d.id driver_id,d.name driver_name,d.phone,
@@ -200,7 +184,6 @@ export async function listSettlementRules(db) {
     JOIN driver_platform_accounts a ON a.driver_id=d.id
     WHERE LOWER(COALESCE(d.status,'active')) NOT IN ('inactive','disabled','deactivated','blocked')
       AND LOWER(COALESCE(a.platform_status,'active')) NOT IN ('inactive','disabled','deactivated','blocked','rejected')
-      AND LOWER(d.name) NOT LIKE 'anúbis%' AND LOWER(d.name) NOT LIKE 'anubis%'
     GROUP BY d.id
     ORDER BY d.name`).all();
   return r.results||[];

@@ -79,9 +79,8 @@ function inferPeriod(fileName) {
 function detectType(rows) {
   const keys = Object.keys(rows[0] || {}).map(normalize);
   if (keys.some((key) => key.includes('ganhos liquidos')) && keys.some((key) => key.includes('motorista'))) return 'bolt_earnings';
-  if (keys.some((key) => key.includes('uuid do motorista')) && keys.some((key) => key.includes('pago a si')) && keys.some((key) => key.includes('gratificacao'))) return 'uber_payments';
   if (keys.some((key) => key.includes('uuid do motorista')) && keys.some((key) => key.includes('tempo online'))) return 'uber_activity';
-  throw new Error('Formato CSV não reconhecido. Usa um relatório Bolt de ganhos, Uber de pagamentos ou Uber de atividade.');
+  throw new Error('Formato CSV não reconhecido. Usa um relatório Bolt de ganhos ou Uber de atividade dos motoristas.');
 }
 
 async function batchRecord(db, input, counts) {
@@ -171,34 +170,6 @@ async function importUberActivity(db, rows, input) {
   return { received: rows.length, created, updated };
 }
 
-
-async function importUberPayments(db, rows, input) {
-  let created=0, updated=0;
-  for (const row of rows) {
-    const externalDriverId=String(findValue(row,['UUID do motorista'])||'').trim();
-    const name=canonicalDriverName([findValue(row,['Nome próprio do motorista']),findValue(row,['Apelido do motorista'])].filter(Boolean).join(' ').trim()||'Motorista Uber');
-    if (normalize(name)==='anubis ribeiro' || normalize(name).includes('mediacao de seguros')) continue;
-    const existingDriver=await existingDriverByName(db,name);
-    const driverId=await upsertDriver(db,{driverId:existingDriver?.id||null,platform:'Uber',externalDriverId:externalDriverId||`csv:${normalize(name)}`,name,status:'active',platformStatus:'active',raw:{source:input.fileName}});
-    const externalId=`${externalDriverId||normalize(name)}:${input.fileName}:${input.periodStart}:${input.periodEnd}`;
-    const existing=await db.prepare(`SELECT id FROM aggregate_driver_periods WHERE platform='Uber' AND external_id=? AND period_start=? AND period_end=?`).bind(externalId,input.periodStart,input.periodEnd).first();
-    const id=existing?.id||uid('agg_');
-    const paid=number(findValue(row,['Pago a si']));
-    const earnings=number(findValue(row,['Pago a si : Os seus rendimentos']));
-    const fare=number(findValue(row,['Pago a si : Os seus rendimentos : Tarifa']));
-    const tips=number(findValue(row,['Pago a si:Os seus rendimentos:Gratificação']));
-    const toll=number(findValue(row,['Pago a si:Saldo da viagem:Reembolsos:Portagem']));
-    const tollTax=number(findValue(row,['Pago a si:Saldo da viagem:Impostos:Imposto sobre a tarifa']));
-    const cancellation=number(findValue(row,['Pago a si:Os seus rendimentos:Tarifa:Cancelamento']));
-    const booking=number(findValue(row,['Pago a si:Os seus rendimentos:Tarifa:Taxa de reserva']))+number(findValue(row,['Pago a si:Os seus rendimentos:Tarifa:Premium da tarifa de reserva']));
-    const campaign=number(findValue(row,['Pago a si:Os seus rendimentos:Promoção:Tarifa']))+number(findValue(row,['Pago a si:Os seus rendimentos:Promoção:Desafio']));
-    const serviceFee=Math.abs(number(findValue(row,['Pago a si:Os seus rendimentos:Taxa de serviço'])));
-    await db.prepare(`INSERT INTO aggregate_driver_periods (id,organization_id,platform,driver_id,external_id,source_name,period_start,period_end,gross_cents,net_cents,commission_cents,tips_cents,tolls_cents,campaign_cents,reimbursement_cents,cancellation_cents,booking_fee_cents,raw_json,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(platform,external_id,period_start,period_end) DO UPDATE SET driver_id=excluded.driver_id,source_name=excluded.source_name,gross_cents=excluded.gross_cents,net_cents=excluded.net_cents,commission_cents=excluded.commission_cents,tips_cents=excluded.tips_cents,tolls_cents=excluded.tolls_cents,campaign_cents=excluded.campaign_cents,reimbursement_cents=excluded.reimbursement_cents,cancellation_cents=excluded.cancellation_cents,booking_fee_cents=excluded.booking_fee_cents,raw_json=excluded.raw_json,updated_at=CURRENT_TIMESTAMP`).bind(id,ORG_ID,'Uber',driverId,externalId,input.fileName,input.periodStart,input.periodEnd,cents(fare||earnings),cents(paid||earnings+toll+tollTax),cents(serviceFee),cents(tips),cents(toll+tollTax),cents(campaign),cents(toll+tollTax),cents(cancellation),cents(booking),JSON.stringify(row)).run();
-    if(existing) updated++; else created++;
-  }
-  return {received:rows.length,created,updated};
-}
-
 export async function importCsv(env, payload = {}) {
   if (!payload.content) throw new Error('O conteúdo do CSV está vazio.');
   const rows = parseCsv(payload.content);
@@ -211,7 +182,7 @@ export async function importCsv(env, payload = {}) {
     throw new Error('Indica o início e o fim do período do relatório.');
   }
   const input = { type, platform: type.startsWith('bolt') ? 'Bolt' : 'Uber', fileName: payload.fileName || 'CSV', periodStart, periodEnd };
-  const result = type === 'bolt_earnings' ? await importBolt(env.DB, rows, input) : type === 'uber_payments' ? await importUberPayments(env.DB, rows, input) : await importUberActivity(env.DB, rows, input);
+  const result = type === 'bolt_earnings' ? await importBolt(env.DB, rows, input) : await importUberActivity(env.DB, rows, input);
   const batchId = await batchRecord(env.DB, input, result);
   return { ...result, batchId, detectedType: type, periodStart, periodEnd };
 }
