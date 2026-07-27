@@ -1,6 +1,7 @@
 import { getSetting } from './db.js';
 
 const ORG_ID = 'org_daniel_sc';
+function normalizeName(value){ return String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toLowerCase(); }
 
 function isoDate(value = new Date()) {
   return (value instanceof Date ? value : new Date(value)).toISOString().slice(0, 10);
@@ -101,7 +102,7 @@ async function build(db, bounds) {
       MAX(CASE WHEN a.platform='Bolt' THEN a.rating END) bolt_rating,
       MAX(CASE WHEN a.platform='Uber' THEN a.rating END) uber_rating
       FROM drivers d LEFT JOIN driver_platform_accounts a ON a.driver_id=d.id GROUP BY d.id ORDER BY d.name`).all(),
-    db.prepare(`SELECT * FROM vehicles ORDER BY license_plate`).all(),
+    db.prepare(`SELECT v.*,d.name current_driver_name FROM vehicles v LEFT JOIN drivers d ON d.id=v.current_driver_id ORDER BY v.license_plate`).all(),
     db.prepare(`SELECT * FROM settlement_rules`).all(),
     db.prepare(`SELECT driver_id,COALESCE(SUM(weekly_rent_cents+operator_commission_calculated_cents),0) operator_gain_cents,
       COALESCE(SUM(payments_cents),0) payments_cents,COALESCE(SUM(balance_cents),0) balance_cents
@@ -145,7 +146,7 @@ async function build(db, bounds) {
     const score = Math.round(productivity * .4 + utilization * .25 + ratingScore * .2 + activityScore * .15);
     const active = [driver.bolt_status, driver.uber_status].some((status) => String(status).toLowerCase() === 'active');
     return { ...driver, active, score: Math.max(0, Math.min(100, score)), rating, sources: [...driver.sources] };
-  }).filter((driver) => driver.total.platformPayableCents || driver.total.trips || driver.active);
+  }).filter((driver) => normalizeName(driver.name) !== 'anubis ribeiro' && (driver.total.platformPayableCents || driver.total.trips || driver.active));
 
   const summary = zeroMetrics();
   for (const driver of resultDrivers) addMetric(summary, driver.total);

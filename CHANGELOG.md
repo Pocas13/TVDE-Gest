@@ -1,17 +1,15 @@
 # TVDE Gest
 
-## Atualização principal
+## Núcleo financeiro real
 
-- Frontend totalmente modular, sem JavaScript embutido no HTML.
-- Novo cockpit operacional de largura total.
-- Dashboard nunca fica em branco: erros e estados vazios são apresentados.
-- Histórico Bolt agregado de 30/12/2025 a 19/07/2026 carregado na D1.
-- Atividade Uber real de 15/06/2026 a 13/07/2026 carregada na D1.
-- Importação de CSV Bolt e Uber diretamente no painel.
-- Fórmula Bolt corrigida: ganhos líquidos menos gorjetas e portagens, divisão por 1,06, reposição de gorjetas e portagens.
-- Intervalos: esta semana, anterior, quatro semanas, trimestre, ano e datas personalizadas.
-- Arquivo Bolt por blocos semanais com retoma após rate limit.
-- Diagnóstico de Worker, Assets, D1, credenciais e volume de dados.
-- Área privada do motorista por ligação expirável e revogável.
-- Fundação multiempresa: organizações, utilizadores, membros e tenant_id.
-- Páginas de motoristas, viaturas, ganhos, cálculos, importações, integrações e produto SaaS.
+- Visão Geral abre em **Esta semana**.
+- Filtros temporais corrigidos para semana atual, semana anterior, quatro semanas e datas personalizadas.
+- Página **Ganhos** mostra totais por plataforma e por motorista.
+- **Cálculo de ganhos** usa dados financeiros agregados e detalhados, sem depender apenas de viagens.
+- Regras por motorista editáveis: aluguer, slot ou percentagem 0%/4%.
+- Relatório semanal mostra Bolt, Uber, IVA, gorjetas, portagens, ganho da empresa e valor a pagar.
+- Importação de CSV Uber de pagamentos suportada.
+- Oito relatórios semanais Uber reais, de 01/06/2026 a 26/07/2026, carregados na migração 0009.
+- Relatório Bolt W29 real (13/07/2026 a 19/07/2026) carregado.
+- Motoristas duplicados consolidados e Anúbis excluído da operação e dos cálculos.
+- Viaturas mostram o nome do motorista associado quando disponível.
