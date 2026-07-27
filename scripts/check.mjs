@@ -32,3 +32,7 @@ const tracked = await Promise.all(files.map((file) => readFile(file, 'utf8'))).t
 const secretPatterns = [/client_secret\s*[:=]\s*["'][^"']{12,}/i,/BOLT_CLIENT_SECRET\s*=\s*(?!coloca_aqui)[^\s#]+/,/UBER_CLIENT_SECRET\s*=\s*(?!\s*$)[A-Za-z0-9_-]{12,}/];
 if (secretPatterns.some((pattern) => pattern.test(tracked))) throw new Error('Foi detetado um possível segredo em ficheiros versionados.');
 console.log('Verificação concluída: frontend modular, Bolt, Uber, CSV, histórico, portal do motorista e D1 OK.');
+
+import fs from 'node:fs';
+for (const required of ['migrations/0010_settlement_reporting_core.sql','migrations/0011_settlement_reports_fix.sql']) { if (!fs.existsSync(required)) throw new Error(`Ficheiro obrigatório em falta: ${required}`); }
+console.log('Migrações 0010 e 0011 confirmadas.');

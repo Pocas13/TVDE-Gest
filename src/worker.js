@@ -318,11 +318,8 @@ async function handleApi(request, env) {
   }
   if (path === '/api/settlements/calculate' && request.method === 'POST') {
     const input = await bodyJson(request);
-    const combinedAuthorized = (await getSetting(env.DB, 'uber_combined_processing_authorized', 'false')) === 'true';
     const weekStart = input.weekStart || previousMonday();
-    // Enquanto não existir autorização escrita da Uber, o cálculo continua disponível
-    // exclusivamente com dados Bolt. Nenhum dado Uber é incluído ou combinado.
-    const platformMode = combinedAuthorized ? 'CONFIGURED' : 'BOLT_ONLY';
+    const platformMode = 'BOLT_UBER';
     const result = await calculateSettlements(env.DB, weekStart, { platformMode });
     await audit(env.DB, { actorEmail: request.headers.get('CF-Access-Authenticated-User-Email'), action: 'settlements.calculated', resourceType: 'week', resourceId: weekStart });
     return json({ ok: true, weekStart, platformMode, settlements: result });

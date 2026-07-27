@@ -85,13 +85,34 @@ export async function addSettlementAdjustment(db, input) {
   return { id };
 }
 
+async function platformTotalsForWeek(db, driverId, platform, weekStart, weekEnd) {
+  const aggregate = await db.prepare(`
+    SELECT COUNT(*) rows_count,
+      COALESCE(SUM(CASE WHEN platform='Bolt' THEN MAX(0,net_cents-tips_cents-tolls_cents) ELSE MAX(0,gross_cents-tips_cents-tolls_cents) END),0) fare,
+      COALESCE(SUM(tips_cents),0) tips,
+      COALESCE(SUM(tolls_cents),0) tolls,
+      COALESCE(SUM(trip_count),0) trips
+    FROM aggregate_driver_periods
+    WHERE driver_id=? AND platform=? AND period_start<=? AND period_end>=?
+  `).bind(driverId, platform, weekEnd, weekStart).first();
+  if (Number(aggregate?.rows_count || 0) > 0) return aggregate;
+  return db.prepare(`
+    SELECT COUNT(*) rows_count,
+      COALESCE(SUM(CASE WHEN platform='Bolt' THEN MAX(0,net_cents-tip_cents-toll_cents) ELSE MAX(0,gross_cents-tip_cents-toll_cents) END),0) fare,
+      COALESCE(SUM(tip_cents),0) tips,
+      COALESCE(SUM(toll_cents),0) tolls,
+      COALESCE(SUM(trip_count),0) trips
+    FROM financial_entries
+    WHERE driver_id=? AND platform=? AND service_date BETWEEN ? AND ?
+  `).bind(driverId, platform, weekStart, weekEnd).first();
+}
+
 export async function calculateSettlements(db, weekStart, options = {}) {
-  const boltOnly = options.platformMode === 'BOLT_ONLY';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(weekStart || ''))) throw new Error('Semana inválida.');
   const weekEnd = addDays(weekStart, 6);
   const drivers = (await db.prepare(`
     SELECT DISTINCT d.id,d.name
-    FROM drivers d
-    JOIN driver_platform_accounts a ON a.driver_id=d.id
+    FROM drivers d JOIN driver_platform_accounts a ON a.driver_id=d.id
     WHERE LOWER(COALESCE(d.status,'active')) NOT IN ('inactive','disabled','deactivated','blocked')
       AND LOWER(COALESCE(a.platform_status,'active')) NOT IN ('inactive','disabled','deactivated','blocked','rejected')
     ORDER BY d.name
@@ -100,41 +121,29 @@ export async function calculateSettlements(db, weekStart, options = {}) {
   for (const driver of drivers) {
     const rule = await ensureDefaultRule(db, driver.id);
     if (Number(rule.active || 0) !== 1) continue;
-    const includeBolt = Number(rule.include_bolt) === 1 ? 1 : 0;
-    const includeUber = boltOnly ? 0 : (Number(rule.include_uber) === 1 ? 1 : 0);
-    const totals = await db.prepare(`
-      SELECT
-        COALESCE(SUM(CASE WHEN platform='Bolt' AND ?=1 THEN CASE WHEN platform='Bolt' THEN MAX(0,net_cents-tip_cents-toll_cents) ELSE MAX(0,gross_cents-tip_cents-toll_cents) END ELSE 0 END),0) bolt_fare,
-        COALESCE(SUM(CASE WHEN platform='Uber' AND ?=1 THEN CASE WHEN platform='Bolt' THEN MAX(0,net_cents-tip_cents-toll_cents) ELSE MAX(0,gross_cents-tip_cents-toll_cents) END ELSE 0 END),0) uber_fare,
-        COALESCE(SUM(CASE WHEN platform='Bolt' AND ?=1 THEN tip_cents ELSE 0 END),0) bolt_tips,
-        COALESCE(SUM(CASE WHEN platform='Uber' AND ?=1 THEN tip_cents ELSE 0 END),0) uber_tips,
-        COALESCE(SUM(CASE WHEN platform='Bolt' AND ?=1 THEN toll_cents ELSE 0 END),0) bolt_tolls,
-        COALESCE(SUM(CASE WHEN platform='Uber' AND ?=1 THEN toll_cents ELSE 0 END),0) uber_tolls,
-        COALESCE(SUM(CASE WHEN platform IN ('Bolt','Uber') THEN trip_count ELSE 0 END),0) trips
-      FROM financial_entries WHERE driver_id=? AND service_date BETWEEN ? AND ?
-    `).bind(includeBolt,includeUber,includeBolt,includeUber,includeBolt,includeUber,driver.id,weekStart,weekEnd).first();
+    const bolt = Number(rule.include_bolt) === 1 ? await platformTotalsForWeek(db, driver.id, 'Bolt', weekStart, weekEnd) : {};
+    const uber = Number(rule.include_uber) === 1 ? await platformTotalsForWeek(db, driver.id, 'Uber', weekStart, weekEnd) : {};
+    const boltFare=Number(bolt.fare||0), uberFare=Number(uber.fare||0);
+    const boltTips=Number(bolt.tips||0), uberTips=Number(uber.tips||0);
+    const boltTolls=Number(bolt.tolls||0), uberTolls=Number(uber.tolls||0);
+    const trips=Number(bolt.trips||0)+Number(uber.trips||0);
     const adjs = await db.prepare(`SELECT
       COALESCE(SUM(CASE WHEN type='credit' THEN amount_cents ELSE 0 END),0) credits,
       COALESCE(SUM(CASE WHEN type='debit' THEN amount_cents ELSE 0 END),0) debits,
       COALESCE(SUM(CASE WHEN type='payment' THEN amount_cents ELSE 0 END),0) payments
       FROM settlement_adjustments WHERE driver_id=? AND week_start=?`).bind(driver.id,weekStart).first();
     const override = await db.prepare('SELECT weekly_charge_cents FROM settlement_week_overrides WHERE driver_id=? AND week_start=?').bind(driver.id,weekStart).first();
-    const fareGross = Number(totals.bolt_fare||0)+Number(totals.uber_fare||0);
-    const tips = Number(totals.bolt_tips||0)+Number(totals.uber_tips||0);
-    const tolls = Number(totals.bolt_tolls||0)+Number(totals.uber_tolls||0);
-    const vatBp = Number(rule.vat_rate_basis_points ?? 600);
-    const fareNetOfVat = Math.round(fareGross * 10000 / (10000 + vatBp));
-    const vatWithheld = fareGross - fareNetOfVat;
-    // Base semanal: viagens sem IVA + gorjetas + portagens.
-    // A comissão percentual (ex.: Marcelo 4%) incide sobre esta base completa.
-    const settlementBase = fareNetOfVat + tips + tolls;
-    const commission = Math.round(settlementBase * Number(rule.operator_commission_basis_points||0) / 10000);
-    const platformPayable = settlementBase - commission;
-    const weeklyCharge = override?.weekly_charge_cents == null ? Number(rule.weekly_rent_cents||0) : Number(override.weekly_charge_cents);
+    const fareGross=boltFare+uberFare, tips=boltTips+uberTips, tolls=boltTolls+uberTolls;
+    const vatBp=Number(rule.vat_rate_basis_points ?? 600);
+    const fareNetOfVat=Math.round(fareGross*10000/(10000+vatBp));
+    const vatWithheld=fareGross-fareNetOfVat;
+    const settlementBase=fareNetOfVat+tips+tolls;
+    const commission=Math.round(settlementBase*Number(rule.operator_commission_basis_points||0)/10000);
+    const weeklyCharge=override?.weekly_charge_cents==null?Number(rule.weekly_rent_cents||0):Number(override.weekly_charge_cents);
     const credits=Number(adjs.credits||0), debits=Number(adjs.debits||0), payments=Number(adjs.payments||0);
-    const baseBalance = platformPayable - weeklyCharge + credits - debits;
-    const balance = applyPayments(baseBalance,payments);
-    const existing = await db.prepare('SELECT id,status FROM weekly_settlements WHERE driver_id=? AND week_start=?').bind(driver.id,weekStart).first();
+    const driverEntitlement=settlementBase-commission-weeklyCharge+credits-debits;
+    const balance=applyPayments(driverEntitlement,payments);
+    const existing=await db.prepare('SELECT id,status FROM weekly_settlements WHERE driver_id=? AND week_start=?').bind(driver.id,weekStart).first();
     const id=existing?.id||uid('set_');
     await db.prepare(`INSERT INTO weekly_settlements (
       id,driver_id,week_start,week_end,mode,bolt_net_cents,uber_net_cents,platform_net_cents,
@@ -145,27 +154,31 @@ export async function calculateSettlements(db, weekStart, options = {}) {
     ON CONFLICT(driver_id,week_start) DO UPDATE SET
       week_end=excluded.week_end,mode=excluded.mode,bolt_net_cents=excluded.bolt_net_cents,uber_net_cents=excluded.uber_net_cents,
       platform_net_cents=excluded.platform_net_cents,weekly_rent_cents=excluded.weekly_rent_cents,
-      percentage_deduction_cents=excluded.percentage_deduction_cents,operator_fee_cents=excluded.operator_fee_cents,
-      credits_cents=excluded.credits_cents,debits_cents=excluded.debits_cents,payments_cents=excluded.payments_cents,
-      balance_cents=excluded.balance_cents,balance_direction=excluded.balance_direction,calculation_json=excluded.calculation_json,
+      percentage_deduction_cents=excluded.percentage_deduction_cents,credits_cents=excluded.credits_cents,
+      debits_cents=excluded.debits_cents,payments_cents=excluded.payments_cents,balance_cents=excluded.balance_cents,
+      balance_direction=excluded.balance_direction,calculation_json=excluded.calculation_json,
       fare_gross_cents=excluded.fare_gross_cents,tips_cents=excluded.tips_cents,tolls_cents=excluded.tolls_cents,
       vat_withheld_cents=excluded.vat_withheld_cents,operator_commission_calculated_cents=excluded.operator_commission_calculated_cents,
       updated_at=CURRENT_TIMESTAMP`).bind(
-        id,driver.id,weekStart,weekEnd,'TVDE_STANDARD',Number(totals.bolt_fare||0),Number(totals.uber_fare||0),platformPayable,
-        weeklyCharge,commission,0,credits,debits,payments,balance,direction(balance),existing?.status||'draft',
-        JSON.stringify({ formula:'bolt:((ganhos_liquidos-gorjetas-portagens)/(1+iva))+gorjetas+portagens; uber:adaptador_proprio', vatBasisPoints:vatBp, commissionBase:'FARE_NET_OF_VAT_PLUS_TIPS_PLUS_TOLLS', trips:Number(totals.trips||0), platformMode: boltOnly ? 'BOLT_ONLY' : 'CONFIGURED' }),
-        fareGross,tips,tolls,vatWithheld,commission
-      ).run();
+      id,driver.id,weekStart,weekEnd,'TVDE_STANDARD',boltFare,uberFare,settlementBase,
+      weeklyCharge,commission,0,credits,debits,payments,balance,direction(balance),existing?.status||'draft',
+      JSON.stringify({formula:'(viagens/1.06)+gorjetas+portagens-taxa/comissao-pagamentos',trips,boltTips,uberTips,boltTolls,uberTolls}),
+      fareGross,tips,tolls,vatWithheld,commission
+    ).run();
     results.push({driverId:driver.id,driverName:driver.name,weekStart,weekEnd,balance,direction:direction(balance)});
   }
   return results;
 }
 
 export async function listSettlements(db, weekStart) {
-  const r=await db.prepare(`SELECT s.*,d.name driver_name,d.phone driver_phone,r.operator_commission_basis_points,r.vat_rate_basis_points,r.charge_type,r.notes rule_notes
+  const r=await db.prepare(`SELECT s.*,d.name driver_name,d.phone driver_phone,r.operator_commission_basis_points,r.vat_rate_basis_points,r.charge_type,r.notes rule_notes,
+    (s.platform_net_cents+s.percentage_deduction_cents+s.weekly_rent_cents-s.credits_cents+s.debits_cents) settlement_base_cents,
+    (s.weekly_rent_cents+s.percentage_deduction_cents) company_gain_cents
     FROM weekly_settlements s JOIN drivers d ON d.id=s.driver_id LEFT JOIN settlement_rules r ON r.driver_id=s.driver_id
-    WHERE s.week_start=? ORDER BY d.name`).bind(weekStart).all(); return r.results||[];
+    WHERE s.week_start=? ORDER BY d.name`).bind(weekStart).all();
+  return r.results||[];
 }
+
 export async function listSettlementRules(db) {
   const drivers = (await db.prepare(`
     SELECT DISTINCT d.id
