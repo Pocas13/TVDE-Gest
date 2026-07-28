@@ -15,3 +15,9 @@
 - Área privada do motorista por ligação expirável e revogável.
 - Fundação multiempresa: organizações, utilizadores, membros e tenant_id.
 - Páginas de motoristas, viaturas, ganhos, cálculos, importações, integrações e produto SaaS.
+
+## 2.0.2
+- Adicionado diagnóstico protegido da API Bolt em Sistema → Diagnóstico.
+- Consulta direta a `getFleetOrders`, sem CSV.
+- Lista automática de todos os campos devolvidos, candidatos financeiros e três amostras com dados pessoais ocultados.
+- Botão para copiar o resultado e permitir mapear corretamente gorjetas e portagens.

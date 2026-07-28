@@ -243,6 +243,84 @@ async function syncBoltOrders(env, companyId, startTs, endTs) {
   return { received: rows.length, created, updated: rows.length - created };
 }
 
+
+function collectFieldPaths(value, prefix = '', output = new Set()) {
+  if (Array.isArray(value)) {
+    output.add(prefix ? `${prefix}[]` : '[]');
+    for (const item of value.slice(0, 5)) collectFieldPaths(item, prefix ? `${prefix}[]` : '[]', output);
+    return output;
+  }
+  if (value && typeof value === 'object') {
+    for (const [key, child] of Object.entries(value)) {
+      const path = prefix ? `${prefix}.${key}` : key;
+      output.add(path);
+      collectFieldPaths(child, path, output);
+    }
+  }
+  return output;
+}
+
+function redactBoltSample(value, key = '') {
+  if (Array.isArray(value)) return value.map((item) => redactBoltSample(item));
+  if (!value || typeof value !== 'object') {
+    if (/phone|email|name|address|token|secret/i.test(key)) return '[ocultado]';
+    return value;
+  }
+  return Object.fromEntries(Object.entries(value).map(([childKey, child]) => [childKey, redactBoltSample(child, childKey)]));
+}
+
+function financialCandidates(order) {
+  const rows = [];
+  const walk = (value, prefix = '') => {
+    if (Array.isArray(value)) return value.forEach((item, index) => walk(item, `${prefix}[${index}]`));
+    if (value && typeof value === 'object') {
+      for (const [key, child] of Object.entries(value)) {
+        const path = prefix ? `${prefix}.${key}` : key;
+        if (/price|earning|tip|gratu|toll|portag|fare|commission|bonus|campaign|reimburse|expense|cancel|booking|reservation|fee|amount|currency|payment/i.test(path)) {
+          if (child == null || ['string','number','boolean'].includes(typeof child)) rows.push({ path, value: child });
+        }
+        walk(child, path);
+      }
+    }
+  };
+  walk(order);
+  return rows;
+}
+
+export async function diagnoseBoltOrders(env, input = {}) {
+  const companyId = input.companyId || await resolveCompanyId(env);
+  const now = new Date();
+  const endTs = Number(input.endTs || Math.floor(now.getTime() / 1000));
+  const startTs = Number(input.startTs || endTs - 7 * 86400);
+  if (!Number.isFinite(startTs) || !Number.isFinite(endTs) || startTs >= endTs) throw new Error('Intervalo inválido para o diagnóstico Bolt.');
+  if (endTs - startTs > 14 * 86400) throw new Error('O diagnóstico Bolt aceita no máximo 14 dias.');
+  const limit = Math.min(20, Math.max(1, Number(input.limit || 5)));
+  const response = await boltRequest(env, 'getFleetOrders', {
+    method: 'POST',
+    body: {
+      company_id: companyId, company_ids: [companyId], start_ts: startTs, end_ts: endTs,
+      time_range_filter_type: 'price_review', offset: 0, limit,
+    },
+  });
+  const orders = Array.isArray(response?.data?.orders) ? response.data.orders : [];
+  const fields = [...orders.reduce((set, order) => collectFieldPaths(order, '', set), new Set())].sort();
+  const candidates = orders.map((order, index) => ({
+    order: index + 1,
+    reference: order.order_reference || null,
+    fields: financialCandidates(order),
+  }));
+  return {
+    ok: true,
+    companyId: String(companyId),
+    interval: { startTs, endTs, start: new Date(startTs * 1000).toISOString(), end: new Date(endTs * 1000).toISOString() },
+    received: orders.length,
+    totalOrders: Number(response?.data?.total_orders || orders.length),
+    fields,
+    financialCandidates: candidates,
+    samples: orders.slice(0, 3).map((order) => redactBoltSample(order)),
+  };
+}
+
 export async function syncBolt(env, options = {}) {
   if (!env.DB) throw new Error('A base de dados D1 não está ligada ao Worker com o binding DB.');
   const runId = await createSyncRun(env.DB, 'Bolt', options.syncType || 'full');

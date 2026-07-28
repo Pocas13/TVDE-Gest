@@ -4,7 +4,7 @@ import { fleetMirror, driverMirror } from './analytics.js';
  * Protege o domínio com Cloudflare Access em produção.
  */
 import { snapshot, getSetting, setSetting, upsertDriver, upsertVehicle, upsertFinancialEntry } from './db.js';
-import { boltRequest, getBoltCompanyIds, syncBolt, createBoltHistoryJob, getBoltHistoryJob, processBoltHistoryJob, resumeBoltHistoryJob } from './platforms/bolt.js';
+import { boltRequest, getBoltCompanyIds, syncBolt, createBoltHistoryJob, getBoltHistoryJob, processBoltHistoryJob, resumeBoltHistoryJob, diagnoseBoltOrders } from './platforms/bolt.js';
 import { getUberOrganizations, syncUber } from './platforms/uber.js';
 import {
   addSettlementAdjustment, calculateSettlements, listSettlementRules,
@@ -172,6 +172,10 @@ async function handleApi(request, env) {
   if (path === '/api/diagnostics' && request.method === 'GET') {
     return json(await diagnostics(env));
   }
+
+  if (path === '/api/diagnostics/bolt-fields' && request.method === 'POST') {
+    return json(await diagnoseBoltOrders(env, await bodyJson(request)));
+  }
   if (path === '/api/portal/bootstrap' && request.method === 'GET') {
     requireDb(env);
     return json({ ok: true, ...(await portalBootstrap(
@@ -318,8 +322,11 @@ async function handleApi(request, env) {
   }
   if (path === '/api/settlements/calculate' && request.method === 'POST') {
     const input = await bodyJson(request);
+    const combinedAuthorized = (await getSetting(env.DB, 'uber_combined_processing_authorized', 'false')) === 'true';
     const weekStart = input.weekStart || previousMonday();
-    const platformMode = 'BOLT_UBER';
+    // Enquanto não existir autorização escrita da Uber, o cálculo continua disponível
+    // exclusivamente com dados Bolt. Nenhum dado Uber é incluído ou combinado.
+    const platformMode = combinedAuthorized ? 'CONFIGURED' : 'BOLT_ONLY';
     const result = await calculateSettlements(env.DB, weekStart, { platformMode });
     await audit(env.DB, { actorEmail: request.headers.get('CF-Access-Authenticated-User-Email'), action: 'settlements.calculated', resourceType: 'week', resourceId: weekStart });
     return json({ ok: true, weekStart, platformMode, settlements: result });

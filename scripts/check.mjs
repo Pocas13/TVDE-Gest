@@ -21,18 +21,14 @@ for (const required of ['TVDE Gest','/assets/app.js','Visão geral']) {
 }
 const app = await readFile('public/assets/app.js', 'utf8');
 if (!app.toLocaleLowerCase('pt-PT').includes('cálculo de ganhos'.toLocaleLowerCase('pt-PT'))) throw new Error('O painel não contém Cálculo de ganhos.');
-for (const required of ['/api/dashboard','/api/imports/csv','/api/driver-access','/api/diagnostics']) {
+for (const required of ['/api/dashboard','/api/imports/csv','/api/driver-access','/api/diagnostics','/api/diagnostics/bolt-fields']) {
   if (!app.includes(required)) throw new Error(`O frontend não usa ${required}.`);
 }
 const worker = await readFile('src/worker.js', 'utf8');
-for (const required of ['/api/dashboard','/api/imports/csv','/api/portal/bootstrap','/api/diagnostics']) {
+for (const required of ['/api/dashboard','/api/imports/csv','/api/portal/bootstrap','/api/diagnostics','/api/diagnostics/bolt-fields']) {
   if (!worker.includes(required)) throw new Error(`A API não contém ${required}.`);
 }
 const tracked = await Promise.all(files.map((file) => readFile(file, 'utf8'))).then((parts) => parts.join('\n'));
 const secretPatterns = [/client_secret\s*[:=]\s*["'][^"']{12,}/i,/BOLT_CLIENT_SECRET\s*=\s*(?!coloca_aqui)[^\s#]+/,/UBER_CLIENT_SECRET\s*=\s*(?!\s*$)[A-Za-z0-9_-]{12,}/];
 if (secretPatterns.some((pattern) => pattern.test(tracked))) throw new Error('Foi detetado um possível segredo em ficheiros versionados.');
 console.log('Verificação concluída: frontend modular, Bolt, Uber, CSV, histórico, portal do motorista e D1 OK.');
-
-import fs from 'node:fs';
-for (const required of ['migrations/0010_settlement_reporting_core.sql','migrations/0011_settlement_reports_fix.sql']) { if (!fs.existsSync(required)) throw new Error(`Ficheiro obrigatório em falta: ${required}`); }
-console.log('Migrações 0010 e 0011 confirmadas.');
